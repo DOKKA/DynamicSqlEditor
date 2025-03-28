@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Data;
 using System.Data.SqlClient;
 using System.Linq;
+using System.Threading.Tasks;
 using DynamicSqlEditor.Common;
 using DynamicSqlEditor.DataAccess;
 using DynamicSqlEditor.Schema.Models;
@@ -18,36 +19,42 @@ namespace DynamicSqlEditor.Schema
             _dbManager = dbManager ?? throw new ArgumentNullException(nameof(dbManager));
         }
 
-        public List<TableSchema> GetAllTables()
+        public async Task<List<TableSchema>> GetAllTablesAsync() // Renamed to indicate async
         {
-            var tables = GetTablesAndViews();
+            var tables = await GetTablesAndViewsAsync(); // Call async version
             if (!tables.Any()) return tables;
 
-            var columns = GetColumns(tables);
-            var primaryKeys = GetPrimaryKeys(tables);
-            var foreignKeys = GetForeignKeys(tables); // Get all FKs at once
+            // Fetch schema components concurrently if possible, or sequentially with await
+            var columnsTask = GetColumnsAsync(tables);
+            var primaryKeysTask = GetPrimaryKeysAsync(tables);
+            var foreignKeysTask = GetForeignKeysAsync(tables);
 
+            // Await all tasks
+            var columns = await columnsTask;
+            var primaryKeys = await primaryKeysTask;
+            var foreignKeys = await foreignKeysTask;
+
+            // (Rest of the method remains the same logic, just uses awaited results)
             foreach (var table in tables)
             {
                 table.Columns.AddRange(columns.Where(c => c.ParentTable == table));
                 table.PrimaryKeys.AddRange(primaryKeys.Where(pk => pk.ParentTable == table));
-                // Assign FKs where this table is the referencing (child) table
                 table.ForeignKeys.AddRange(foreignKeys.Where(fk => fk.ReferencingTable == table));
-                // Assign FKs where this table is the referenced (parent) table
                 table.ReferencedByForeignKeys.AddRange(foreignKeys.Where(fk => fk.ReferencedTable == table));
             }
 
             return tables;
         }
 
-        private List<TableSchema> GetTablesAndViews()
+        private async Task<List<TableSchema>> GetTablesAndViewsAsync()
         {
             var tables = new List<TableSchema>();
             string sql = @"SELECT TABLE_SCHEMA, TABLE_NAME, TABLE_TYPE FROM INFORMATION_SCHEMA.TABLES
-                           WHERE TABLE_TYPE IN ('BASE TABLE', 'VIEW') ORDER BY TABLE_SCHEMA, TABLE_NAME;";
+                   WHERE TABLE_TYPE IN ('BASE TABLE', 'VIEW') ORDER BY TABLE_SCHEMA, TABLE_NAME;";
             try
             {
-                DataTable dt = _dbManager.ExecuteQueryAsync(sql, null).Result; // Blocking for simplicity here, consider async flow
+                // Use await instead of .Result
+                DataTable dt = await _dbManager.ExecuteQueryAsync(sql, null);
                 foreach (DataRow row in dt.Rows)
                 {
                     tables.Add(new TableSchema
@@ -61,12 +68,12 @@ namespace DynamicSqlEditor.Schema
             catch (Exception ex)
             {
                 FileLogger.Error("Failed to retrieve tables and views.", ex);
-                throw; // Re-throw to indicate schema loading failure
+                throw;
             }
             return tables;
         }
 
-        private List<ColumnSchema> GetColumns(List<TableSchema> tables)
+        private async Task<List<ColumnSchema>> GetColumnsAsync(List<TableSchema> tables)
         {
             var columns = new List<ColumnSchema>();
             string sql = @"
@@ -87,7 +94,7 @@ namespace DynamicSqlEditor.Schema
                 ORDER BY c.TABLE_SCHEMA, c.TABLE_NAME, c.ORDINAL_POSITION;";
             try
             {
-                DataTable dt = _dbManager.ExecuteQueryAsync(sql, null).Result;
+                DataTable dt = await _dbManager.ExecuteQueryAsync(sql, null); // Use await
                 foreach (DataRow row in dt.Rows)
                 {
                     string schemaName = row["TABLE_SCHEMA"].ToString();
@@ -119,7 +126,7 @@ namespace DynamicSqlEditor.Schema
             return columns;
         }
 
-        private List<PrimaryKeySchema> GetPrimaryKeys(List<TableSchema> tables)
+        private async Task<List<PrimaryKeySchema>> GetPrimaryKeysAsync(List<TableSchema> tables)
         {
             var primaryKeys = new List<PrimaryKeySchema>();
             string sql = @"
@@ -138,7 +145,7 @@ namespace DynamicSqlEditor.Schema
                 ORDER BY kcu.TABLE_SCHEMA, kcu.TABLE_NAME, kcu.ORDINAL_POSITION;";
             try
             {
-                DataTable dt = _dbManager.ExecuteQueryAsync(sql, null).Result;
+                DataTable dt = await _dbManager.ExecuteQueryAsync(sql, null); // Use await
                 foreach (DataRow row in dt.Rows)
                 {
                      string schemaName = row["TABLE_SCHEMA"].ToString();
@@ -168,7 +175,7 @@ namespace DynamicSqlEditor.Schema
             return primaryKeys;
         }
 
-        private List<ForeignKeySchema> GetForeignKeys(List<TableSchema> tables)
+        private async Task<List<ForeignKeySchema>> GetForeignKeysAsync(List<TableSchema> tables)
         {
             var foreignKeys = new List<ForeignKeySchema>();
              string sql = @"
@@ -191,7 +198,7 @@ namespace DynamicSqlEditor.Schema
                 ORDER BY Referencing_Schema, Referencing_Table, FK_Name;";
             try
             {
-                DataTable dt = _dbManager.ExecuteQueryAsync(sql, null).Result;
+                DataTable dt = await _dbManager.ExecuteQueryAsync(sql, null); // Use await
                 foreach (DataRow row in dt.Rows)
                 {
                     string referencingSchema = row["Referencing_Schema"].ToString();

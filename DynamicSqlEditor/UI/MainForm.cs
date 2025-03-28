@@ -21,18 +21,33 @@ namespace DynamicSqlEditor.UI
             this.Load += MainForm_Load;
         }
 
-        private void MainForm_Load(object sender, EventArgs e)
+        private async void MainForm_Load(object sender, EventArgs e) // Make Load async void
         {
             this.WindowState = FormWindowState.Maximized;
             UpdateStatus("Initializing...");
-            if (_stateManager.Initialize())
+            this.Cursor = Cursors.WaitCursor; // Show wait cursor
+            try
             {
-                 UpdateStatus($"Connected to {_stateManager.CurrentDatabaseName}. Ready.");
+                // Await the async Initialize
+                if (await _stateManager.InitializeAsync())
+                {
+                    UpdateStatus($"Connected to {_stateManager.CurrentDatabaseName}. Ready.");
+                }
+                else
+                {
+                    UpdateStatus("Connection failed. Please check configuration or logs.");
+                    MessageBox.Show("Failed to connect to the database based on configuration. Please check AppConfig.dsl and logs.", "Connection Error", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                }
             }
-            else
+            catch (Exception ex)
             {
-                 UpdateStatus("Connection failed. Please check configuration or logs.");
-                 MessageBox.Show("Failed to connect to the database based on configuration. Please check AppConfig.dsl and logs.", "Connection Error", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                UpdateStatus($"Initialization error: {ex.Message}");
+                FileLogger.Error("Error during MainForm_Load/StateManager.InitializeAsync", ex);
+                MessageBox.Show($"An error occurred during initialization: {ex.Message}", "Initialization Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+            finally
+            {
+                this.Cursor = Cursors.Default; // Restore cursor
             }
         }
 

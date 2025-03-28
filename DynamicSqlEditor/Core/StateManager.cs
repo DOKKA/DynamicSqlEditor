@@ -5,7 +5,8 @@ using DynamicSqlEditor.Configuration;
 using DynamicSqlEditor.DataAccess;
 using DynamicSqlEditor.Schema; // <-- Make sure this line exists
 using DynamicSqlEditor.Schema.Models;
-using DynamicSqlEditor.Common; // For FileLogger
+using DynamicSqlEditor.Common;
+using System.Threading.Tasks; // For FileLogger
 
 namespace DynamicSqlEditor.Core
 {
@@ -26,15 +27,17 @@ namespace DynamicSqlEditor.Core
             ConfigManager = new ConfigurationManager();
         }
 
-        public bool Initialize()
+        public async Task<bool> InitializeAsync() // Make Initialize async
         {
-            bool configLoaded = ConfigManager.LoadConfiguration(); // Load global config first
+            bool configLoaded = ConfigManager.LoadConfiguration();
 
             if (ConfigManager.CurrentConfig?.Connection?.ConnectionString != null)
             {
+                // Assuming ConnectToDatabase remains synchronous for simplicity here,
+                // but if it does async work, make it async too.
                 if (ConnectToDatabase())
                 {
-                    RefreshSchema();
+                    await RefreshSchemaAsync(); // Await the async refresh
                     return true;
                 }
                 else
@@ -103,30 +106,29 @@ namespace DynamicSqlEditor.Core
             OnSchemaRefreshed();
         }
 
-        public void RefreshSchema()
+        public async Task RefreshSchemaAsync() // Renamed and made async
         {
             if (!IsConnected || SchemaProvider == null)
             {
                 AvailableTables.Clear();
-                OnSchemaRefreshed();
+                OnSchemaRefreshed(); // This event needs careful handling if UI updates directly
                 return;
             }
 
             try
             {
                 FileLogger.Info("Refreshing database schema...");
-                var allTables = SchemaProvider.GetAllTables();
-                // Line 118 should now work
+                // Use await when calling the async version
+                var allTables = await SchemaProvider.GetAllTablesAsync();
                 AvailableTables = SchemaFilter.FilterTables(allTables, ConfigManager.CurrentConfig.Global);
                 FileLogger.Info($"Schema refreshed. Found {AvailableTables.Count} available tables after filtering.");
-                OnSchemaRefreshed();
+                OnSchemaRefreshed(); // Consider invoking UI updates safely if needed here
             }
             catch (Exception ex)
             {
                 FileLogger.Error("Failed to refresh database schema.", ex);
                 AvailableTables.Clear();
                 OnSchemaRefreshed();
-                // Maybe show an error to the user?
             }
         }
 
