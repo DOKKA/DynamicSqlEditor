@@ -26,19 +26,20 @@ namespace DynamicSqlEditor.DataAccess
             try
             {
                 // Simple query using OFFSET FETCH to check syntax support
-                string testQuery = "SELECT 1 ORDER BY (SELECT NULL) OFFSET 0 ROWS FETCH NEXT 0 ROWS ONLY;";
+                string testQuery = "SELECT 1 ORDER BY (SELECT NULL) OFFSET 0 ROWS FETCH NEXT 1 ROWS ONLY;";
                 await _dbManager.ExecuteScalarAsync(testQuery, null);
                 _supportsOffsetFetch = true;
                 FileLogger.Info("Database supports OFFSET/FETCH paging.");
             }
-            catch (SqlException ex) when (ex.Number == 102 || ex.Number == 156) // Incorrect syntax errors
+            catch (SqlException ex)
             {
+                // Any SQL exception means it's not supported
                 _supportsOffsetFetch = false;
-                FileLogger.Info("Database does not support OFFSET/FETCH paging. Falling back to ROW_NUMBER().");
+                FileLogger.Info($"Database does not support OFFSET/FETCH paging (SQL error {ex.Number}). Falling back to ROW_NUMBER().");
             }
             catch (Exception ex)
             {
-                 FileLogger.Error("Error checking OFFSET/FETCH support. Assuming not supported.", ex);
+                FileLogger.Error("Error checking OFFSET/FETCH support. Assuming not supported.", ex);
                 _supportsOffsetFetch = false; // Assume not supported on other errors
             }
             return _supportsOffsetFetch.Value;

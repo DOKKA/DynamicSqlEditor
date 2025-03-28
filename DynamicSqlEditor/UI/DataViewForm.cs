@@ -253,10 +253,43 @@ namespace DynamicSqlEditor.UI
 
             if (IsDirty && !PromptSaveChanges())
             {
+                // User cancelled the save/discard prompt
                 FileLogger.Warning("Selection changed while dirty, but user cancelled save/discard.");
+
+                // Temporarily remove the event handler
+                _bindingSource.CurrentChanged -= BindingSource_CurrentChanged;
+
+                // Revert to previous selection
+                if (_originalKeyValues != null)
+                {
+                    // Find the row with matching key values
+                    foreach (DataRowView rowView in _bindingSource)
+                    {
+                        bool match = true;
+                        foreach (var kvp in _originalKeyValues)
+                        {
+                            if (!rowView[kvp.Key].Equals(kvp.Value))
+                            {
+                                match = false;
+                                break;
+                            }
+                        }
+
+                        if (match)
+                        {
+                            _bindingSource.Position = _bindingSource.IndexOf(rowView);
+                            break;
+                        }
+                    }
+                }
+
+                // Reattach the event handler
+                _bindingSource.CurrentChanged += BindingSource_CurrentChanged;
+
+                return; // Exit without updating UI
             }
 
-            PopulateDetailPanel(); // Calls instance method on _detailBuilder
+            PopulateDetailPanel();
             ClearRelatedTabsData();
             LoadDataForVisibleRelatedTab();
             UpdateStatusAndControlStates();

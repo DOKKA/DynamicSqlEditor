@@ -4,7 +4,13 @@ namespace DynamicSqlEditor.Schema.Models
 {
     public class ColumnSchema
     {
-        public TableSchema ParentTable { get; set; }
+        // --- Add these temporary properties ---
+        public string ParentTableSchemaName { get; set; }
+        public string ParentTableName { get; set; }
+        // --- End of additions ---
+
+        // Existing properties
+        public TableSchema ParentTable { get; set; } // Keep this, will be linked later
         public string ColumnName { get; set; }
         public int OrdinalPosition { get; set; }
         public string DataType { get; set; }
@@ -18,6 +24,7 @@ namespace DynamicSqlEditor.Schema.Models
         public bool IsComputed { get; set; }
         public bool IsTimestamp { get; set; } // rowversion or timestamp
 
+        // Existing GetSqlDbType method...
         public SqlDbType GetSqlDbType()
         {
             // Basic mapping, needs refinement for specific types

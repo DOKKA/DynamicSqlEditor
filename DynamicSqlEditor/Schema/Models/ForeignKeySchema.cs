@@ -2,10 +2,20 @@ namespace DynamicSqlEditor.Schema.Models
 {
     public class ForeignKeySchema
     {
+        // --- Add these temporary properties ---
+        public string ReferencingSchemaName { get; set; }
+        public string ReferencingTableName { get; set; }
+        public string ReferencingColumnName { get; set; }
+        public string ReferencedSchemaName { get; set; }
+        public string ReferencedTableName { get; set; }
+        public string ReferencedColumnName { get; set; }
+        // --- End of additions ---
+
+        // Existing properties
         public string ConstraintName { get; set; }
-        public TableSchema ReferencingTable { get; set; } // The table containing the FK column (Child)
-        public ColumnSchema ReferencingColumn { get; set; } // The FK column itself
-        public TableSchema ReferencedTable { get; set; } // The table the FK points to (Parent)
-        public ColumnSchema ReferencedColumn { get; set; } // The PK/Unique column being referenced
+        public TableSchema ReferencingTable { get; set; } // Keep this, will be linked later
+        public ColumnSchema ReferencingColumn { get; set; } // Keep this, will be linked later
+        public TableSchema ReferencedTable { get; set; } // Keep this, will be linked later
+        public ColumnSchema ReferencedColumn { get; set; } // Keep this, will be linked later
     }
 }

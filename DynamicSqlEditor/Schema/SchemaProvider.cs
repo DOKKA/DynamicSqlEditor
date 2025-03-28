@@ -19,41 +19,118 @@ namespace DynamicSqlEditor.Schema
             _dbManager = dbManager ?? throw new ArgumentNullException(nameof(dbManager));
         }
 
-        public async Task<List<TableSchema>> GetAllTablesAsync() // Renamed to indicate async
+        public async Task<List<TableSchema>> GetAllTablesAsync()
         {
-            var tables = await GetTablesAndViewsAsync(); // Call async version
+            // 1. Get base table list
+            var tables = await GetTablesAndViewsAsync();
             if (!tables.Any()) return tables;
 
-            // Fetch schema components concurrently if possible, or sequentially with await
-            var columnsTask = GetColumnsAsync(tables);
-            var primaryKeysTask = GetPrimaryKeysAsync(tables);
-            var foreignKeysTask = GetForeignKeysAsync(tables);
+            // Create a lookup dictionary for efficient access during linking
+            var tableMap = tables.ToDictionary(t => $"{t.SchemaName}.{t.TableName}", StringComparer.OrdinalIgnoreCase);
 
-            // Await all tasks
-            var columns = await columnsTask;
-            var primaryKeys = await primaryKeysTask;
-            var foreignKeys = await foreignKeysTask;
+            // 2. Fetch all raw data concurrently
+            var columnsTask = GetColumnsAsync(); // Returns List<ColumnSchema> with names, not linked ParentTable yet
+            var primaryKeysTask = GetPrimaryKeysAsync(); // Returns List<PrimaryKeySchema> with names
+            var foreignKeysTask = GetForeignKeysAsync(); // Returns List<ForeignKeySchema> with names
 
-            // (Rest of the method remains the same logic, just uses awaited results)
-            foreach (var table in tables)
+            // Await all results
+            var columnData = await columnsTask;
+            var primaryKeyData = await primaryKeysTask;
+            var foreignKeyData = await foreignKeysTask;
+
+            // --- 3. Process and Link Data AFTER all fetching is complete ---
+            FileLogger.Info("Linking schema information...");
+
+            // Link Columns to Tables
+            foreach (var col in columnData)
             {
-                table.Columns.AddRange(columns.Where(c => c.ParentTable == table));
-                table.PrimaryKeys.AddRange(primaryKeys.Where(pk => pk.ParentTable == table));
-                table.ForeignKeys.AddRange(foreignKeys.Where(fk => fk.ReferencingTable == table));
-                table.ReferencedByForeignKeys.AddRange(foreignKeys.Where(fk => fk.ReferencedTable == table));
+                if (tableMap.TryGetValue($"{col.ParentTableSchemaName}.{col.ParentTableName}", out var table))
+                {
+                    col.ParentTable = table; // Assign the actual TableSchema object reference NOW
+                    table.Columns.Add(col);
+                }
+                else
+                {
+                    FileLogger.Warning($"Column '{col.ColumnName}' references table '{col.ParentTableSchemaName}.{col.ParentTableName}' which was not found in the initial table list.");
+                }
             }
+            FileLogger.Info($"Linked {columnData.Count} columns to {tableMap.Count} tables.");
 
+            // Link Primary Keys to Tables and Columns
+            int linkedPKs = 0;
+            foreach (var pk in primaryKeyData)
+            {
+                if (tableMap.TryGetValue($"{pk.ParentTableSchemaName}.{pk.ParentTableName}", out var table))
+                {
+                    pk.ParentTable = table;
+                    // Find the ColumnSchema object that was just added to the table's Columns list
+                    pk.Column = table.Columns.FirstOrDefault(c => c.ColumnName.Equals(pk.ColumnName, StringComparison.OrdinalIgnoreCase));
+
+                    if (pk.Column != null)
+                    {
+                        pk.Column.IsPrimaryKey = true; // Mark the column object
+                        table.PrimaryKeys.Add(pk);
+                        linkedPKs++;
+                    }
+                    else
+                    {
+                        FileLogger.Warning($"Primary key '{pk.KeyName}' references column '{pk.ColumnName}' which was not found in table '{table.FullName}'.");
+                    }
+                }
+                else
+                {
+                    FileLogger.Warning($"Primary key '{pk.KeyName}' references table '{pk.ParentTableSchemaName}.{pk.ParentTableName}' which was not found in the initial table list.");
+                }
+            }
+            FileLogger.Info($"Linked {linkedPKs} primary key columns.");
+
+            // Link Foreign Keys to Tables and Columns
+            int linkedFKs = 0;
+            foreach (var fk in foreignKeyData)
+            {
+                // Look up referencing (child) and referenced (parent) tables
+                if (tableMap.TryGetValue($"{fk.ReferencingSchemaName}.{fk.ReferencingTableName}", out var referencingTable) &&
+                    tableMap.TryGetValue($"{fk.ReferencedSchemaName}.{fk.ReferencedTableName}", out var referencedTable))
+                {
+                    fk.ReferencingTable = referencingTable;
+                    fk.ReferencedTable = referencedTable;
+
+                    // Now, look up columns within the populated lists
+                    fk.ReferencingColumn = referencingTable.Columns.FirstOrDefault(c => c.ColumnName.Equals(fk.ReferencingColumnName, StringComparison.OrdinalIgnoreCase));
+                    fk.ReferencedColumn = referencedTable.Columns.FirstOrDefault(c => c.ColumnName.Equals(fk.ReferencedColumnName, StringComparison.OrdinalIgnoreCase));
+
+                    if (fk.ReferencingColumn != null && fk.ReferencedColumn != null)
+                    {
+                        fk.ReferencingColumn.IsForeignKey = true; // Mark the column object
+                        referencingTable.ForeignKeys.Add(fk);          // Add to FKs list of child
+                        referencedTable.ReferencedByForeignKeys.Add(fk); // Add to ReferencedBy list of parent
+                        linkedFKs++;
+                    }
+                    else
+                    {
+                        FileLogger.Warning($"Could not fully resolve FK '{fk.ConstraintName}'. Column lookup failed (Child: {fk.ReferencingColumnName} found={fk.ReferencingColumn != null}, Parent: {fk.ReferencedColumnName} found={fk.ReferencedColumn != null}).");
+                    }
+                }
+                else
+                {
+                    FileLogger.Warning($"Could not fully resolve FK '{fk.ConstraintName}'. Table lookup failed (Child: {fk.ReferencingSchemaName}.{fk.ReferencingTableName} found={referencingTable != null}, Parent: {fk.ReferencedSchemaName}.{fk.ReferencedTableName} ).");
+                }
+            }
+            FileLogger.Info($"Linked {linkedFKs} foreign keys.");
+
+            // 4. Return the fully populated list
             return tables;
         }
+
+        // --- Helper Methods (Modified) ---
 
         private async Task<List<TableSchema>> GetTablesAndViewsAsync()
         {
             var tables = new List<TableSchema>();
             string sql = @"SELECT TABLE_SCHEMA, TABLE_NAME, TABLE_TYPE FROM INFORMATION_SCHEMA.TABLES
-                   WHERE TABLE_TYPE IN ('BASE TABLE', 'VIEW') ORDER BY TABLE_SCHEMA, TABLE_NAME;";
+                           WHERE TABLE_TYPE IN ('BASE TABLE', 'VIEW') ORDER BY TABLE_SCHEMA, TABLE_NAME;";
             try
             {
-                // Use await instead of .Result
                 DataTable dt = await _dbManager.ExecuteQueryAsync(sql, null);
                 foreach (DataRow row in dt.Rows)
                 {
@@ -64,6 +141,7 @@ namespace DynamicSqlEditor.Schema
                         IsView = row["TABLE_TYPE"].ToString().Equals("VIEW", StringComparison.OrdinalIgnoreCase)
                     });
                 }
+                FileLogger.Info($"Retrieved {tables.Count} tables and views.");
             }
             catch (Exception ex)
             {
@@ -73,7 +151,7 @@ namespace DynamicSqlEditor.Schema
             return tables;
         }
 
-        private async Task<List<ColumnSchema>> GetColumnsAsync(List<TableSchema> tables)
+        private async Task<List<ColumnSchema>> GetColumnsAsync() // No 'tables' parameter
         {
             var columns = new List<ColumnSchema>();
             string sql = @"
@@ -94,17 +172,15 @@ namespace DynamicSqlEditor.Schema
                 ORDER BY c.TABLE_SCHEMA, c.TABLE_NAME, c.ORDINAL_POSITION;";
             try
             {
-                DataTable dt = await _dbManager.ExecuteQueryAsync(sql, null); // Use await
+                DataTable dt = await _dbManager.ExecuteQueryAsync(sql, null);
                 foreach (DataRow row in dt.Rows)
                 {
-                    string schemaName = row["TABLE_SCHEMA"].ToString();
-                    string tableName = row["TABLE_NAME"].ToString();
-                    var parentTable = tables.FirstOrDefault(t => t.SchemaName == schemaName && t.TableName == tableName);
-                    if (parentTable == null) continue; // Skip columns for tables not found (shouldn't happen)
-
                     columns.Add(new ColumnSchema
                     {
-                        ParentTable = parentTable,
+                        // Store names needed for later lookup
+                        ParentTableSchemaName = row["TABLE_SCHEMA"].ToString(),
+                        ParentTableName = row["TABLE_NAME"].ToString(),
+                        // Assign other properties
                         ColumnName = row["COLUMN_NAME"].ToString(),
                         OrdinalPosition = Convert.ToInt32(row["ORDINAL_POSITION"]),
                         DataType = row["DATA_TYPE"].ToString(),
@@ -114,9 +190,12 @@ namespace DynamicSqlEditor.Schema
                         IsNullable = row["IS_NULLABLE"].ToString().Equals("YES", StringComparison.OrdinalIgnoreCase),
                         IsIdentity = row["IS_IDENTITY"] != DBNull.Value && Convert.ToInt32(row["IS_IDENTITY"]) == 1,
                         IsComputed = row["IS_COMPUTED"] != DBNull.Value && Convert.ToInt32(row["IS_COMPUTED"]) == 1,
-                        IsTimestamp = Convert.ToInt32(row["IS_TIMESTAMP"]) == 1
+                        IsTimestamp = Convert.ToInt32(row["IS_TIMESTAMP"]) == 1,
+                        // Ensure object reference is null initially
+                        ParentTable = null
                     });
                 }
+                FileLogger.Info($"Retrieved {columns.Count} column definitions.");
             }
             catch (Exception ex)
             {
@@ -126,7 +205,7 @@ namespace DynamicSqlEditor.Schema
             return columns;
         }
 
-        private async Task<List<PrimaryKeySchema>> GetPrimaryKeysAsync(List<TableSchema> tables)
+        private async Task<List<PrimaryKeySchema>> GetPrimaryKeysAsync() // No 'tables' parameter
         {
             var primaryKeys = new List<PrimaryKeySchema>();
             string sql = @"
@@ -145,27 +224,24 @@ namespace DynamicSqlEditor.Schema
                 ORDER BY kcu.TABLE_SCHEMA, kcu.TABLE_NAME, kcu.ORDINAL_POSITION;";
             try
             {
-                DataTable dt = await _dbManager.ExecuteQueryAsync(sql, null); // Use await
+                DataTable dt = await _dbManager.ExecuteQueryAsync(sql, null);
                 foreach (DataRow row in dt.Rows)
                 {
-                     string schemaName = row["TABLE_SCHEMA"].ToString();
-                    string tableName = row["TABLE_NAME"].ToString();
-                    var parentTable = tables.FirstOrDefault(t => t.SchemaName == schemaName && t.TableName == tableName);
-                    if (parentTable == null) continue;
-
-                    var column = parentTable.Columns.FirstOrDefault(c => c.ColumnName == row["COLUMN_NAME"].ToString());
-                    if (column == null) continue; // Should have column info already
-
-                    column.IsPrimaryKey = true; // Mark the column as part of PK
-
                     primaryKeys.Add(new PrimaryKeySchema
                     {
-                        ParentTable = parentTable,
-                        Column = column,
+                        // Store names needed for later lookup
+                        ParentTableSchemaName = row["TABLE_SCHEMA"].ToString(),
+                        ParentTableName = row["TABLE_NAME"].ToString(),
+                        ColumnName = row["COLUMN_NAME"].ToString(), // Store column name
+                        // Other properties
                         KeyName = row["CONSTRAINT_NAME"].ToString(),
-                        OrdinalPosition = Convert.ToInt32(row["ORDINAL_POSITION"])
+                        OrdinalPosition = Convert.ToInt32(row["ORDINAL_POSITION"]),
+                        // Ensure object references are null initially
+                        ParentTable = null,
+                        Column = null
                     });
                 }
+                FileLogger.Info($"Retrieved {primaryKeys.Count} primary key column definitions.");
             }
             catch (Exception ex)
             {
@@ -175,10 +251,10 @@ namespace DynamicSqlEditor.Schema
             return primaryKeys;
         }
 
-        private async Task<List<ForeignKeySchema>> GetForeignKeysAsync(List<TableSchema> tables)
+        private async Task<List<ForeignKeySchema>> GetForeignKeysAsync() // No 'tables' parameter
         {
             var foreignKeys = new List<ForeignKeySchema>();
-             string sql = @"
+            string sql = @"
                 SELECT
                     fk.name AS FK_Name,
                     ts.name AS Referencing_Schema,
@@ -198,35 +274,27 @@ namespace DynamicSqlEditor.Schema
                 ORDER BY Referencing_Schema, Referencing_Table, FK_Name;";
             try
             {
-                DataTable dt = await _dbManager.ExecuteQueryAsync(sql, null); // Use await
+                DataTable dt = await _dbManager.ExecuteQueryAsync(sql, null);
                 foreach (DataRow row in dt.Rows)
                 {
-                    string referencingSchema = row["Referencing_Schema"].ToString();
-                    string referencingTable = row["Referencing_Table"].ToString();
-                    string referencedSchema = row["Referenced_Schema"].ToString();
-                    string referencedTable = row["Referenced_Table"].ToString();
-
-                    var parentTable = tables.FirstOrDefault(t => t.SchemaName == referencingSchema && t.TableName == referencingTable);
-                    var pkTable = tables.FirstOrDefault(t => t.SchemaName == referencedSchema && t.TableName == referencedTable);
-
-                    if (parentTable == null || pkTable == null) continue; // Skip if tables involved aren't in our list
-
-                    var referencingColumn = parentTable.Columns.FirstOrDefault(c => c.ColumnName == row["Referencing_Column"].ToString());
-                    var referencedColumn = pkTable.Columns.FirstOrDefault(c => c.ColumnName == row["Referenced_Column"].ToString());
-
-                    if (referencingColumn == null || referencedColumn == null) continue; // Skip if columns not found
-
-                    referencingColumn.IsForeignKey = true; // Mark the column
-
                     foreignKeys.Add(new ForeignKeySchema
                     {
                         ConstraintName = row["FK_Name"].ToString(),
-                        ReferencingTable = parentTable,
-                        ReferencingColumn = referencingColumn,
-                        ReferencedTable = pkTable,
-                        ReferencedColumn = referencedColumn
+                        // Store names
+                        ReferencingSchemaName = row["Referencing_Schema"].ToString(),
+                        ReferencingTableName = row["Referencing_Table"].ToString(),
+                        ReferencingColumnName = row["Referencing_Column"].ToString(),
+                        ReferencedSchemaName = row["Referenced_Schema"].ToString(),
+                        ReferencedTableName = row["Referenced_Table"].ToString(),
+                        ReferencedColumnName = row["Referenced_Column"].ToString(),
+                        // Ensure object references are null initially
+                        ReferencingTable = null,
+                        ReferencingColumn = null,
+                        ReferencedTable = null,
+                        ReferencedColumn = null
                     });
                 }
+                FileLogger.Info($"Retrieved {foreignKeys.Count} foreign key definitions.");
             }
             catch (Exception ex)
             {
