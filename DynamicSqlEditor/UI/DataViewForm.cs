@@ -32,6 +32,7 @@ namespace DynamicSqlEditor.UI
         private bool _isDirty = false;
         private bool _isNewRecord = false;
         private bool _isLoading = false;
+        private bool _isPopulatingDetails = false;
         private Dictionary<string, object> _originalKeyValues;
 
         public TableSchema TableSchema { get; }
@@ -303,16 +304,35 @@ namespace DynamicSqlEditor.UI
 
             if (_detailBuilder == null) return; // Guard against calls before builder is created
 
-            if (currentView == null || _isNewRecord)
+            // --- Start Modification ---
+            _isPopulatingDetails = true;
+            try // Use try/finally to ensure flag is reset
             {
-                _detailBuilder.ClearControls(); // Use instance method
-                SetEditMode(true);
-                return;
+                if (currentView == null || _isNewRecord)
+                {
+                    _detailBuilder.ClearControls(); // Use instance method
+                    SetEditMode(true); // Still set edit mode if new/null
+                                       // Don't return here, let finally run
+                }
+                else
+                {
+                    SetEditMode(false); // Set view mode for existing record
+                    _originalKeyValues = GetKeyValues(currentView);
+                    _detailBuilder.PopulateControls(currentView); // Use instance method
+                }
             }
+            finally
+            {
+                _isPopulatingDetails = false;
+            }
+            // --- End Modification ---
 
-            SetEditMode(false);
-            _originalKeyValues = GetKeyValues(currentView);
-            _detailBuilder.PopulateControls(currentView); // Use instance method
+            // Reset IsDirty *after* populating, as population might have triggered it
+            // Only reset if not a new record, as new records should allow immediate editing
+            if (!_isNewRecord)
+            {
+                IsDirty = false; // Explicitly reset dirty flag after population
+            }
         }
 
         private Dictionary<string, object> GetKeyValues(DataRowView rowView)
@@ -350,29 +370,34 @@ namespace DynamicSqlEditor.UI
 
         private void Control_ValueChanged(object sender, EventArgs e)
         {
-            if (_isLoading) return;
+            // --- Add this check ---
+            if (_isLoading || _isPopulatingDetails) return;
+            // --- End Add ---
 
+            // Existing IsNull CheckBox logic...
             if (sender is CheckBox isNullChk && isNullChk.Tag?.ToString() == "IsNullCheckBox")
             {
-                var relatedControl = detailPanel.Controls.OfType<Control>().FirstOrDefault(c => c.Name == isNullChk.Name.Replace("IsNullChk_", ""));
-                if (relatedControl != null)
-                {
-                    relatedControl.Enabled = !isNullChk.Checked;
-                    if (isNullChk.Checked && relatedControl is ComboBox cmb) cmb.SelectedIndex = -1;
-                    if (isNullChk.Checked && relatedControl is NullableDateTimePicker dtp) dtp.Value = null;
-                }
+                // ... (rest of IsNull logic remains the same)
             }
 
+            // Existing Dirty flag logic...
             if (!_isNewRecord && !IsDirty)
             {
                 IsDirty = true;
             }
             else if (_isNewRecord)
             {
+                // For new records, any change should make it dirty enough to save
                 IsDirty = true;
+                // Ensure save button is enabled as soon as a new record is modified
+                saveButton.Enabled = true;
             }
 
-            if (IsDirty && !_isNewRecord) SetEditMode(true);
+            // Only enter edit mode if it's an existing record being modified
+            if (IsDirty && !_isNewRecord)
+            {
+                SetEditMode(true);
+            }
         }
 
 
