@@ -159,13 +159,9 @@ namespace DynamicSqlEditor.UI
 
         private async Task LoadDataAsync(int pageNumber)
         {
-            // REMOVE THIS CHECK:
-            // if (_isLoading) return;
 
-            // Keep this check for unsaved changes:
             if (IsDirty && !PromptSaveChanges()) return;
 
-            // The rest of the method remains the same...
             _isLoading = true; 
             this.Cursor = Cursors.WaitCursor;
             mainDataGridView.DataSource = null;
@@ -190,7 +186,7 @@ namespace DynamicSqlEditor.UI
             }
             finally
             {
-                _isLoading = false; // Keep this to mark loading as finished.
+                _isLoading = false; 
                 this.Cursor = Cursors.Default;
                 OnStatusChanged($"Page {_dataViewManager.CurrentPage} of {_dataViewManager.TotalPages} ({_dataViewManager.TotalRecords} records) - {TableSchema.DisplayName}");
             }
