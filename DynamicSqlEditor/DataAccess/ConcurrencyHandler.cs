@@ -1,4 +1,3 @@
-// File: DynamicSqlEditor/DataAccess/ConcurrencyHandler.cs
 using System;
 using System.Collections.Generic;
 using System.Data;
@@ -13,7 +12,6 @@ namespace DynamicSqlEditor.DataAccess
     public class ConcurrencyHandler
     {
         private readonly ColumnSchema _timestampColumn;
-
         public bool HasConcurrencyColumn => _timestampColumn != null;
 
         public ConcurrencyHandler(TableSchema tableSchema)
@@ -24,35 +22,20 @@ namespace DynamicSqlEditor.DataAccess
         public void AddConcurrencyCheckToCommand(StringBuilder sqlBuilder, List<SqlParameter> parameters, object originalTimestampValue)
         {
             if (!HasConcurrencyColumn) return;
-
             if (originalTimestampValue == null || originalTimestampValue == DBNull.Value)
             {
-                // This case is tricky. If the original timestamp was null (e.g., newly inserted row not refreshed?),
-                // we cannot perform a reliable concurrency check based on timestamp.
-                // Options:
-                // 1. Throw an exception: Safest, forces refresh before edit/delete.
-                // 2. Skip timestamp check: Riskier, might overwrite changes.
-                // 3. Check if timestamp IS NULL: Only works if it's possible for it to be null (unlikely for rowversion).
                 FileLogger.Warning($"Concurrency check skipped for table '{_timestampColumn.ParentTable.FullName}' because original timestamp value was null.");
-                // For now, we skip the check if the original value is null. Consider throwing instead.
                 return;
-                // throw new InvalidOperationException("Cannot perform concurrency check: Original timestamp value is missing.");
             }
 
-            // Ensure WHERE clause exists before adding AND
             string sql = sqlBuilder.ToString();
-            // Use IndexOf with StringComparison instead of Contains with two arguments
-            if (sql.IndexOf(" WHERE ", StringComparison.OrdinalIgnoreCase) == -1) // Corrected check
+            if (sql.IndexOf(" WHERE ", StringComparison.OrdinalIgnoreCase) == -1)
             {
-                // This should not happen if called after PK checks are added
                 FileLogger.Error("Concurrency check attempted before WHERE clause was added.");
                 throw new InvalidOperationException("WHERE clause missing before adding concurrency check.");
             }
 
-            // Append the timestamp check condition
             sqlBuilder.Append($" AND [{_timestampColumn.ColumnName}] = @Original_{_timestampColumn.ColumnName}");
-
-            // Add the timestamp parameter
             parameters.Add(SqlParameterHelper.CreateParameter($"@Original_{_timestampColumn.ColumnName}", originalTimestampValue, _timestampColumn.GetSqlDbType()));
         }
 

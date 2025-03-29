@@ -1,12 +1,12 @@
 using System;
 using System.Collections.Generic;
-using System.Linq; // Ensure Linq is included
+using System.Linq;
+using System.Threading.Tasks;
+using DynamicSqlEditor.Common;
 using DynamicSqlEditor.Configuration;
 using DynamicSqlEditor.DataAccess;
-using DynamicSqlEditor.Schema; // <-- Make sure this line exists
+using DynamicSqlEditor.Schema;
 using DynamicSqlEditor.Schema.Models;
-using DynamicSqlEditor.Common;
-using System.Threading.Tasks; // For FileLogger
 
 namespace DynamicSqlEditor.Core
 {
@@ -27,29 +27,26 @@ namespace DynamicSqlEditor.Core
             ConfigManager = new ConfigurationManager();
         }
 
-        public async Task<bool> InitializeAsync() // Make Initialize async
+        public async Task<bool> InitializeAsync()
         {
             bool configLoaded = ConfigManager.LoadConfiguration();
 
             if (ConfigManager.CurrentConfig?.Connection?.ConnectionString != null)
             {
-                // Assuming ConnectToDatabase remains synchronous for simplicity here,
-                // but if it does async work, make it async too.
                 if (ConnectToDatabase())
                 {
-                    await RefreshSchemaAsync(); // Await the async refresh
+                    await RefreshSchemaAsync();
                     return true;
                 }
                 else
                 {
-                    // Connection failed based on initial config
                     return false;
                 }
             }
             else
             {
                 FileLogger.Warning("No connection string found in configuration. Cannot connect automatically.");
-                return false; // Cannot proceed without connection
+                return false;
             }
         }
 
@@ -66,17 +63,15 @@ namespace DynamicSqlEditor.Core
 
             try
             {
-                DbManager?.Dispose(); // Dispose previous connection if any
+                DbManager?.Dispose();
                 DbManager = new DatabaseManager(connStr, timeout);
-                DbManager.TestConnection(); // Verify connection works
+                DbManager.TestConnection();
 
                 CurrentDatabaseName = DbManager.GetDatabaseName();
                 FileLogger.Info($"Successfully connected to database: {CurrentDatabaseName}");
 
-                // Reload config potentially merging DB specific file
                 ConfigManager.LoadConfiguration(CurrentDatabaseName);
 
-                // Update DbManager timeout if config changed
                 DbManager.DefaultTimeout = ConfigManager.CurrentConfig.Connection.QueryTimeout;
 
                 SchemaProvider = new SchemaProvider(DbManager);
@@ -106,23 +101,22 @@ namespace DynamicSqlEditor.Core
             OnSchemaRefreshed();
         }
 
-        public async Task RefreshSchemaAsync() // Renamed and made async
+        public async Task RefreshSchemaAsync()
         {
             if (!IsConnected || SchemaProvider == null)
             {
                 AvailableTables.Clear();
-                OnSchemaRefreshed(); // This event needs careful handling if UI updates directly
+                OnSchemaRefreshed();
                 return;
             }
 
             try
             {
                 FileLogger.Info("Refreshing database schema...");
-                // Use await when calling the async version
                 var allTables = await SchemaProvider.GetAllTablesAsync();
                 AvailableTables = SchemaFilter.FilterTables(allTables, ConfigManager.CurrentConfig.Global);
                 FileLogger.Info($"Schema refreshed. Found {AvailableTables.Count} available tables after filtering.");
-                OnSchemaRefreshed(); // Consider invoking UI updates safely if needed here
+                OnSchemaRefreshed();
             }
             catch (Exception ex)
             {

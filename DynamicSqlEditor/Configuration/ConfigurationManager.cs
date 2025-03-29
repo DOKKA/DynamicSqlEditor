@@ -1,9 +1,8 @@
-// File: DynamicSqlEditor/Configuration/ConfigurationManager.cs
 using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Windows.Forms; // <-- Add this using directive for SortOrder
+using System.Windows.Forms;
 using DynamicSqlEditor.Common;
 using DynamicSqlEditor.Configuration.Models;
 
@@ -18,18 +17,15 @@ namespace DynamicSqlEditor.Configuration
         public TableConfig GetTableConfig(string schemaName, string tableName)
         {
             string fullTableName = $"{schemaName}.{tableName}";
-            // Use CurrentConfig which holds the loaded configuration
             CurrentConfig.Tables.TryGetValue(fullTableName, out var config);
-            // Return a new default config if not found, ensuring it's never null
             return config ?? new TableConfig(fullTableName);
         }
 
         public bool LoadConfiguration(string databaseName = null)
         {
             ParsingErrors.Clear();
-            // Create new instances to ensure merging doesn't carry over old state incorrectly
             CurrentConfig = new AppConfig();
-            _parser.ClearInternalState(); // Add a method to clear parser state if needed
+            _parser.ClearInternalState();
 
             string baseConfigPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, Constants.ConfigDirectory, Constants.DefaultConfigFileName);
             string dbSpecificConfigPath = null;
@@ -38,25 +34,17 @@ namespace DynamicSqlEditor.Configuration
                 dbSpecificConfigPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, Constants.ConfigDirectory, $"{databaseName}.dsl");
             }
 
-            // Load base first, then merge DB specific over it
-            bool baseLoaded = LoadAndParseFile(baseConfigPath, false); // Don't merge yet
-
-            // Create a new parser instance or clear state before parsing the second file
-            // to ensure settings are merged correctly if the DslParser keeps state.
-            // Assuming DslParser's Parse method handles merging or overwriting correctly when called multiple times.
-            // If not, the logic needs adjustment here to load into separate DslParser instances and merge manually.
+            bool baseLoaded = LoadAndParseFile(baseConfigPath, false);
 
             bool dbSpecificLoaded = false;
             if (dbSpecificConfigPath != null && File.Exists(dbSpecificConfigPath))
             {
-                // Parse the DB-specific file, letting the parser merge/overwrite
-                dbSpecificLoaded = LoadAndParseFile(dbSpecificConfigPath, true); // Indicate merge
+                dbSpecificLoaded = LoadAndParseFile(dbSpecificConfigPath, true);
             }
 
             if (!baseLoaded && !dbSpecificLoaded)
             {
                 FileLogger.Warning($"No configuration files found or loaded ({baseConfigPath}, {dbSpecificConfigPath}). Using defaults.");
-                // Allow continuing with defaults, but log it.
             }
 
             ProcessParsedData();
@@ -74,28 +62,21 @@ namespace DynamicSqlEditor.Configuration
                 FileLogger.Info("Configuration loaded successfully.");
             }
 
-            // Return true only if no critical errors (ignore warnings like duplicates)
             return !ParsingErrors.Any(e => !e.Contains("Duplicate key") && !e.StartsWith("Unknown key") && !e.StartsWith("Unknown configuration section"));
         }
 
-        // Modified LoadAndParseFile to potentially handle merging state if parser doesn't
         private bool LoadAndParseFile(string filePath, bool merge)
         {
             if (!File.Exists(filePath)) return false;
 
             FileLogger.Info($"Attempting to load configuration from: {filePath}");
-            // If DslParser doesn't merge internally, create a temp parser here
-            // DslParser tempParser = new DslParser();
-            // bool success = tempParser.Parse(filePath);
-            // Merge tempParser._sections into _parser._sections manually here if needed
-            bool success = _parser.Parse(filePath); // Assuming Parse handles merging/overwriting
+            bool success = _parser.Parse(filePath);
             ParsingErrors.AddRange(_parser.Errors);
             return success;
         }
 
         private void ProcessParsedData()
         {
-            // Ensure base structures exist
             if (CurrentConfig.Connection == null) CurrentConfig.Connection = new ConnectionConfig();
             if (CurrentConfig.Global == null) CurrentConfig.Global = new GlobalConfig();
 
@@ -132,7 +113,6 @@ namespace DynamicSqlEditor.Configuration
                 }
             }
 
-            // Apply global defaults if not set after processing all files
             if (!CurrentConfig.Global.DefaultFKDisplayHeuristic.Any())
             {
                 CurrentConfig.Global.DefaultFKDisplayHeuristic = SplitCsv(Constants.DefaultFKHeuristic);
@@ -141,7 +121,6 @@ namespace DynamicSqlEditor.Configuration
 
         private void ProcessConnectionSection(Dictionary<string, string> settings)
         {
-            // Use existing or create new if null
             CurrentConfig.Connection = CurrentConfig.Connection ?? new ConnectionConfig();
 
             if (settings.TryGetValue(Constants.Keys.ConnectionString, out var connectionString))
@@ -151,7 +130,6 @@ namespace DynamicSqlEditor.Configuration
             {
                 CurrentConfig.Connection.QueryTimeout = timeout;
             }
-            // Ensure default timeout if not specified
             else if (CurrentConfig.Connection.QueryTimeout <= 0)
             {
                 CurrentConfig.Connection.QueryTimeout = Constants.DefaultQueryTimeout;
@@ -170,8 +148,6 @@ namespace DynamicSqlEditor.Configuration
 
             if (settings.TryGetValue(Constants.Keys.DefaultFKDisplayHeuristic, out var fkHeuristic))
                 CurrentConfig.Global.DefaultFKDisplayHeuristic = SplitCsv(fkHeuristic);
-            // Default heuristic applied later in ProcessParsedData if still empty
-
 
             if (settings.TryGetValue(Constants.Keys.DisableCustomActionExecution, out var disableStr) && bool.TryParse(disableStr, out bool disable))
             {
@@ -204,7 +180,6 @@ namespace DynamicSqlEditor.Configuration
                     }
                     else if (key.Equals(Constants.Keys.DefaultSortDirection, StringComparison.OrdinalIgnoreCase))
                     {
-                        // Line ~171 where the error occurred
                         if (Enum.TryParse<SortOrder>(value, true, out var direction))
                         {
                             tableConfig.DefaultSortDirection = direction;
@@ -229,11 +204,10 @@ namespace DynamicSqlEditor.Configuration
                     else if (key.StartsWith(Constants.Keys.FilterPrefix, StringComparison.OrdinalIgnoreCase))
                     {
                         string filterName = key.Substring(Constants.Keys.FilterPrefix.Length);
-                        if (filterName.Equals("Default", StringComparison.OrdinalIgnoreCase)) continue; // Skip Filter.Default here
+                        if (filterName.Equals("Default", StringComparison.OrdinalIgnoreCase)) continue;
                         var filter = ParseFilterDefinition(filterName, value, tableName);
-                        if (filter != null) 
+                        if (filter != null)
                             tableConfig.Filters[filterName] = filter;
-                        var www = tableConfig;
                     }
                     else if (key.StartsWith(Constants.Keys.DetailFormFieldPrefix, StringComparison.OrdinalIgnoreCase))
                     {
@@ -307,7 +281,7 @@ namespace DynamicSqlEditor.Configuration
                 field.Order = order;
             }
             attrs.TryGetValue(Constants.Attributes.Label, out var label);
-            field.Label = label; // Can be null
+            field.Label = label;
 
             if (attrs.TryGetValue(Constants.Attributes.ReadOnly, out var readOnlyStr) && bool.TryParse(readOnlyStr, out bool readOnly))
             {
@@ -318,7 +292,7 @@ namespace DynamicSqlEditor.Configuration
                 field.Visible = visible;
             }
             attrs.TryGetValue(Constants.Attributes.ControlType, out var controlType);
-            field.ControlType = controlType; // Can be null
+            field.ControlType = controlType;
 
             return field;
         }
@@ -344,8 +318,8 @@ namespace DynamicSqlEditor.Configuration
                 FKColumnName = fkColumnName,
                 ReferencedTable = referencedTable,
                 DisplayColumn = displayColumn,
-                ValueColumn = valueColumn, // Can be null
-                ReferencedColumn = referencedColumn // Can be null
+                ValueColumn = valueColumn,
+                ReferencedColumn = referencedColumn
             };
         }
 
@@ -406,8 +380,8 @@ namespace DynamicSqlEditor.Configuration
                 Label = label,
                 ChildTable = childTable,
                 ChildFKColumn = childFkColumn,
-                ParentPKColumn = parentPkColumn, // Can be null
-                ChildFilter = childFilter // Can be null
+                ParentPKColumn = parentPkColumn,
+                ChildFilter = childFilter
             };
         }
 
@@ -423,26 +397,16 @@ namespace DynamicSqlEditor.Configuration
                       .ToList();
         }
 
-        // Helper for DslParser state clearing if needed
         public void ClearParserState()
         {
-            _parser.ClearInternalState(); // Assuming DslParser has this method
+            _parser.ClearInternalState();
         }
     }
 
-    // Add this extension method to DslParser if it doesn't have a clear method
     public static class DslParserExtensions
     {
-        // Add this method if DslParser needs explicit clearing
         public static void ClearInternalState(this DslParser parser)
         {
-            // Access internal fields via reflection if necessary and allowed,
-            // or preferably add a public Clear method to DslParser itself.
-            // Example (if _sections and _errors were public/internal):
-            // parser._sections.Clear();
-            // parser._errors.Clear();
-
-            // If they are private, reflection is needed (less ideal):
             var sectionsField = typeof(DslParser).GetField("_sections", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
             var errorsField = typeof(DslParser).GetField("_errors", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
 

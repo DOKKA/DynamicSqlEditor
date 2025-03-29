@@ -2,11 +2,11 @@
 using System;
 using System.Collections.Generic;
 using System.Data;
-using System.Data.SqlClient; // Includes System.Data.SqlClient.SortOrder
+using System.Data.SqlClient;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
-using System.Windows.Forms; // Includes System.Windows.Forms.SortOrder
+using System.Windows.Forms;
 using DynamicSqlEditor.Common;
 using DynamicSqlEditor.Configuration.Models;
 using DynamicSqlEditor.DataAccess;
@@ -23,20 +23,17 @@ namespace DynamicSqlEditor.Core
         private readonly DataPager _dataPager;
 
         public int CurrentPage { get; private set; } = 1;
-        public int PageSize { get; set; } = 50; // Default page size
+        public int PageSize { get; set; } = 50;
         public int TotalRecords { get; private set; } = 0;
-        public int TotalPages => (TotalRecords == 0 || PageSize <= 0) ? 1 : (int)Math.Ceiling((double)TotalRecords / PageSize); // Avoid division by zero, ensure at least 1 page if 0 records
+        public int TotalPages => (TotalRecords == 0 || PageSize <= 0) ? 1 : (int)Math.Ceiling((double)TotalRecords / PageSize);
 
         public string CurrentSortColumn { get; private set; }
-        // Explicitly qualify the type here
         public System.Windows.Forms.SortOrder CurrentSortDirection { get; private set; } = System.Windows.Forms.SortOrder.Ascending;
 
         public FilterDefinition CurrentFilter { get; private set; }
         public Dictionary<string, object> CurrentFilterParameters { get; private set; } = new Dictionary<string, object>();
 
-        // Add DbManager property if needed by others (like FilterInputDialog lookup helpers)
         public DatabaseManager DbManager => _dbManager;
-
 
         public DataViewManager(DatabaseManager dbManager, TableSchema tableSchema, TableConfig tableConfig)
         {
@@ -54,17 +51,13 @@ namespace DynamicSqlEditor.Core
         private void ApplyDefaultSort()
         {
             CurrentSortColumn = _tableConfig.DefaultSortColumn;
-            // The type of _tableConfig.DefaultSortDirection is already System.Windows.Forms.SortOrder
-            // The type of CurrentSortDirection is now explicitly System.Windows.Forms.SortOrder
-            // So this assignment should now be valid without explicit cast/qualification here.
-            CurrentSortDirection = (System.Windows.Forms.SortOrder)_tableConfig.DefaultSortDirection; // Line 49
+            CurrentSortDirection = (System.Windows.Forms.SortOrder)_tableConfig.DefaultSortDirection;
 
             if (string.IsNullOrEmpty(CurrentSortColumn) && _tableSchema.PrimaryKeys.Any())
             {
                 CurrentSortColumn = _tableSchema.PrimaryKeys.First().Column.ColumnName;
-                CurrentSortDirection = System.Windows.Forms.SortOrder.Ascending; // Qualify here too for clarity
+                CurrentSortDirection = System.Windows.Forms.SortOrder.Ascending;
             }
-            // Add fallback if no PK and no default sort?
             else if (string.IsNullOrEmpty(CurrentSortColumn))
             {
                 var firstCol = _tableSchema.Columns.OrderBy(c => c.OrdinalPosition).FirstOrDefault();
@@ -77,7 +70,6 @@ namespace DynamicSqlEditor.Core
                 else
                 {
                     FileLogger.Error($"Cannot determine default sort for {_tableSchema.FullName}. No PK, no default, and no columns found.");
-                    // Leave CurrentSortColumn null, QueryBuilder might handle it
                 }
             }
         }
@@ -87,7 +79,7 @@ namespace DynamicSqlEditor.Core
             if (!string.IsNullOrEmpty(_tableConfig.DefaultFilterName) &&
                 _tableConfig.Filters.TryGetValue(_tableConfig.DefaultFilterName, out var defaultFilter))
             {
-                if (string.IsNullOrEmpty(defaultFilter.RequiresInput)) // Only apply if no input needed initially
+                if (string.IsNullOrEmpty(defaultFilter.RequiresInput))
                 {
                     CurrentFilter = defaultFilter;
                 }
@@ -101,10 +93,8 @@ namespace DynamicSqlEditor.Core
         public async Task<(DataTable Data, int TotalRecords)> LoadDataAsync(int pageNumber)
         {
             if (pageNumber < 1) pageNumber = 1;
-            // Don't clamp pageNumber to TotalPages here, let DataPager handle it after count
 
             string baseQuery = _queryBuilder.GetSelectQuery();
-            // Pass the explicitly typed CurrentSortDirection
             string orderByClause = _queryBuilder.GetOrderByClause(CurrentSortColumn, this.CurrentSortDirection);
             string whereClause = _queryBuilder.GetWhereClause(CurrentFilter);
 
@@ -112,28 +102,24 @@ namespace DynamicSqlEditor.Core
 
             try
             {
-                // Let DataPager calculate total and adjust page if needed
                 var (data, total) = await _dataPager.GetPagedDataAsync(baseQuery, whereClause, orderByClause, parameters, pageNumber, PageSize);
                 TotalRecords = total;
 
-                // Now determine the correct CurrentPage based on results
-                int actualTotalPages = this.TotalPages; // Use calculated property
+                int actualTotalPages = this.TotalPages;
                 if (pageNumber > actualTotalPages && actualTotalPages > 0)
                 {
                     CurrentPage = actualTotalPages;
-                    // Reload data for the *actual* last page if the requested page was too high
                     FileLogger.Info($"Requested page {pageNumber} exceeds total pages {actualTotalPages}. Loading page {CurrentPage} instead.");
                     (data, total) = await _dataPager.GetPagedDataAsync(baseQuery, whereClause, orderByClause, parameters, CurrentPage, PageSize);
-                    // TotalRecords should be the same, but update just in case
                     TotalRecords = total;
                 }
-                else if (actualTotalPages == 0) // Handle case where filter results in 0 records
+                else if (actualTotalPages == 0)
                 {
                     CurrentPage = 1;
                 }
                 else
                 {
-                    CurrentPage = pageNumber; // Requested page was valid
+                    CurrentPage = pageNumber;
                 }
 
                 return (data, total);
@@ -141,34 +127,31 @@ namespace DynamicSqlEditor.Core
             catch (Exception ex)
             {
                 FileLogger.Error($"Error loading data for table {_tableSchema.FullName}", ex);
-                TotalRecords = 0; // Reset count on error
+                TotalRecords = 0;
                 CurrentPage = 1;
-                throw; // Re-throw to be handled by UI
+                throw;
             }
         }
 
         public async Task<(DataTable Data, int TotalRecords)> RefreshDataAsync()
         {
-            // Reload data for the current page, sort, and filter
             return await LoadDataAsync(CurrentPage);
         }
 
         public async Task<(DataTable Data, int TotalRecords)> GoToPageAsync(int pageNumber)
         {
-            // Basic validation, LoadDataAsync will handle clamping if needed after count
             if (pageNumber < 1) pageNumber = 1;
             return await LoadDataAsync(pageNumber);
         }
 
         public async Task<(DataTable Data, int TotalRecords)> NextPageAsync()
         {
-            // Allow going past end, LoadDataAsync will clamp
             return await GoToPageAsync(CurrentPage + 1);
         }
 
         public async Task<(DataTable Data, int TotalRecords)> PreviousPageAsync()
         {
-            return await GoToPageAsync(CurrentPage - 1); // Clamped to 1 by GoToPageAsync/LoadDataAsync
+            return await GoToPageAsync(CurrentPage - 1);
         }
 
         public async Task<(DataTable Data, int TotalRecords)> FirstPageAsync()
@@ -178,7 +161,6 @@ namespace DynamicSqlEditor.Core
 
         public async Task<(DataTable Data, int TotalRecords)> LastPageAsync()
         {
-            // Calculate TotalPages based on current TotalRecords before navigating
             int lastPage = this.TotalPages;
             return await GoToPageAsync(lastPage > 0 ? lastPage : 1);
         }
@@ -187,37 +169,34 @@ namespace DynamicSqlEditor.Core
         {
             if (string.IsNullOrEmpty(columnName))
             {
-                // Maybe reset to default sort? Or clear sort?
-                // Let's reset to default defined in config or by PK
                 ApplyDefaultSort();
                 return await LoadDataAsync(1);
             }
 
             if (CurrentSortColumn == columnName)
             {
-                // Toggle direction, explicitly qualify
                 CurrentSortDirection = (CurrentSortDirection == System.Windows.Forms.SortOrder.Ascending) ? System.Windows.Forms.SortOrder.Descending : System.Windows.Forms.SortOrder.Ascending;
             }
             else
             {
                 CurrentSortColumn = columnName;
-                CurrentSortDirection = System.Windows.Forms.SortOrder.Ascending; // Default to Ascending on new column
+                CurrentSortDirection = System.Windows.Forms.SortOrder.Ascending;
             }
-            return await LoadDataAsync(1); // Reset to first page on sort change
+            return await LoadDataAsync(1);
         }
 
         public async Task<(DataTable Data, int TotalRecords)> ApplyFilterAsync(FilterDefinition filter, Dictionary<string, object> parameters)
         {
             CurrentFilter = filter;
             CurrentFilterParameters = parameters ?? new Dictionary<string, object>();
-            return await LoadDataAsync(1); // Reset to first page on filter change
+            return await LoadDataAsync(1);
         }
 
         public async Task<(DataTable Data, int TotalRecords)> ClearFilterAsync()
         {
             CurrentFilter = null;
             CurrentFilterParameters.Clear();
-            return await LoadDataAsync(1); // Reset to first page
+            return await LoadDataAsync(1);
         }
 
         public async Task<DataTable> GetLookupDataAsync(FKLookupDefinition lookupConfig)
@@ -230,13 +209,9 @@ namespace DynamicSqlEditor.Core
                 throw new InvalidOperationException($"Cannot determine ValueColumn for lookup on table {lookupConfig.ReferencedTable}. Specify ValueColumn in config or ensure table has a single PK.");
             }
 
-            // Ensure columns are quoted correctly, especially if coming from config/heuristics
             string displayColQuoted = $"[{lookupConfig.DisplayColumn.Trim('[', ']')}]";
             string valueColQuoted = $"[{valueCol.Trim('[', ']')}]";
-
-            // Use PARSENAME for robust table name splitting and quoting
             string safeReferencedTable = $"[{PARSENAME(lookupConfig.ReferencedTable, 2)}].[{PARSENAME(lookupConfig.ReferencedTable, 1)}]";
-
 
             string sql = $"SELECT DISTINCT {displayColQuoted}, {valueColQuoted} FROM {safeReferencedTable} ORDER BY {displayColQuoted}";
 
@@ -254,7 +229,7 @@ namespace DynamicSqlEditor.Core
         public async Task<DataTable> GetRelatedDataAsync(RelatedChildDefinition relatedConfig, Dictionary<string, object> parentKeyValues)
         {
             if (relatedConfig == null) throw new ArgumentNullException(nameof(relatedConfig));
-            if (parentKeyValues == null || !parentKeyValues.Any()) return new DataTable(); // No parent selected
+            if (parentKeyValues == null || !parentKeyValues.Any()) return new DataTable();
 
             string parentPkColumn = relatedConfig.ParentPKColumn;
             if (string.IsNullOrEmpty(parentPkColumn))
@@ -275,26 +250,20 @@ namespace DynamicSqlEditor.Core
                 return new DataTable();
             }
 
-            // Use PARSENAME for robust table name splitting and quoting
             string safeChildTable = $"[{PARSENAME(relatedConfig.ChildTable, 2)}].[{PARSENAME(relatedConfig.ChildTable, 1)}]";
             string childFkColQuoted = $"[{relatedConfig.ChildFKColumn.Trim('[', ']')}]";
-
 
             var sqlBuilder = new StringBuilder($"SELECT * FROM {safeChildTable}");
             sqlBuilder.Append($" WHERE {childFkColQuoted} = @ParentKeyValue");
 
-            // Get SqlDbType for the parameter if possible
             var parentPkColSchema = _tableSchema.GetColumn(parentPkColumn);
             var parameters = new List<SqlParameter>
-             {
-                 SqlParameterHelper.CreateParameter("@ParentKeyValue", parentKeyValues[parentPkColumn], parentPkColSchema?.GetSqlDbType())
-             };
+            {
+                SqlParameterHelper.CreateParameter("@ParentKeyValue", parentKeyValues[parentPkColumn], parentPkColSchema?.GetSqlDbType())
+            };
 
             if (!string.IsNullOrWhiteSpace(relatedConfig.ChildFilter))
             {
-                // WARNING: Potential for SQL injection if ChildFilter contains dynamic parts not parameterized.
-                // Assume ChildFilter is static for now. For dynamic values, parameterization is needed.
-                // Basic validation: Check for comments, common injection patterns? Risky.
                 if (relatedConfig.ChildFilter.Contains("--") || relatedConfig.ChildFilter.Contains(";") || relatedConfig.ChildFilter.Contains("/*"))
                 {
                     FileLogger.Error($"Potential SQL injection detected in RelatedChild.ChildFilter for relation '{relatedConfig.RelationName}'. Aborting query.");
@@ -303,7 +272,7 @@ namespace DynamicSqlEditor.Core
                 sqlBuilder.Append($" AND ({relatedConfig.ChildFilter})");
             }
 
-            sqlBuilder.Append($" ORDER BY {childFkColQuoted}"); // Default sort, could be configurable
+            sqlBuilder.Append($" ORDER BY {childFkColQuoted}");
 
             try
             {
@@ -316,15 +285,10 @@ namespace DynamicSqlEditor.Core
             }
         }
 
-
         private async Task<string> GetPrimaryKeyColumnAsync(string fullTableName)
         {
-            // This might require a separate schema lookup if not already cached
-            // For simplicity, assume single PK for now or require explicit ValueColumn
-            // A real implementation would query INFORMATION_SCHEMA.KEY_COLUMN_USAGE
             try
             {
-                // Use PARSENAME for safety
                 string safeSchema = PARSENAME(fullTableName, 2);
                 string safeTable = PARSENAME(fullTableName, 1);
 
@@ -340,9 +304,9 @@ namespace DynamicSqlEditor.Core
                     WHERE OBJECTPROPERTY(OBJECT_ID(CONSTRAINT_SCHEMA + '.' + QUOTENAME(CONSTRAINT_NAME)), 'IsPrimaryKey') = 1
                     AND TABLE_SCHEMA = @Schema AND TABLE_NAME = @Table;";
                 var parameters = new List<SqlParameter> {
-                     SqlParameterHelper.CreateParameter("@Schema", safeSchema),
-                     SqlParameterHelper.CreateParameter("@Table", safeTable)
-                 };
+                    SqlParameterHelper.CreateParameter("@Schema", safeSchema),
+                    SqlParameterHelper.CreateParameter("@Table", safeTable)
+                };
                 object result = await _dbManager.ExecuteScalarAsync(query, parameters);
                 return result?.ToString();
             }
@@ -353,21 +317,18 @@ namespace DynamicSqlEditor.Core
             }
         }
 
-        // Helper for safe table/schema name parsing
         private string PARSENAME(string objectName, int part)
         {
-            // Basic simulation if PARSENAME isn't available or for non-SQL source
-            // Assumes "Schema.Table" or just "Table" format
             var parts = objectName.Split('.');
-            if (part == 1) // Table Name
+            if (part == 1)
             {
                 return parts.Length > 1 ? parts[1].Trim('[', ']') : parts[0].Trim('[', ']');
             }
-            if (part == 2) // Schema Name
+            if (part == 2)
             {
-                return parts.Length > 1 ? parts[0].Trim('[', ']') : "dbo"; // Default schema if not specified
+                return parts.Length > 1 ? parts[0].Trim('[', ']') : "dbo";
             }
-            return null; // Invalid part
+            return null;
         }
     }
 }

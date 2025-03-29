@@ -33,12 +33,10 @@ namespace DynamicSqlEditor.Core
 
             if (!insertColumns.Any())
             {
-                // Check if only identity/computed/timestamp columns exist or were provided
                 bool onlySpecialCols = _tableSchema.Columns.All(c => c.IsIdentity || c.IsComputed || c.IsTimestamp);
                 if (onlySpecialCols)
                 {
                     FileLogger.Warning($"Attempted insert into {_tableSchema.FullName} which has no insertable columns.");
-                    // Depending on behavior, maybe return 0 or throw specific exception
                     return 0;
                 }
                 throw new InvalidOperationException("No insertable columns found or provided values for insertable columns.");
@@ -50,7 +48,6 @@ namespace DynamicSqlEditor.Core
             sqlBuilder.Append(string.Join(", ", insertColumns.Select(c => $"@{c.ColumnName}")));
             sqlBuilder.Append(");");
 
-            // Optionally retrieve identity value if applicable
             var identityColumn = _tableSchema.Columns.FirstOrDefault(c => c.IsIdentity);
             if (identityColumn != null)
             {
@@ -66,13 +63,12 @@ namespace DynamicSqlEditor.Core
                 if (identityColumn != null)
                 {
                     object result = await _dbManager.ExecuteScalarAsync(sqlBuilder.ToString(), parameters);
-                    // Handle potential non-integer identity types if necessary
                     return (result == null || result == DBNull.Value) ? 0 : Convert.ToInt32(result);
                 }
                 else
                 {
                     int rowsAffected = await _dbManager.ExecuteNonQueryAsync(sqlBuilder.ToString(), parameters);
-                    return rowsAffected; // Return rows affected for non-identity inserts
+                    return rowsAffected;
                 }
             }
             catch (SqlException ex)
@@ -91,7 +87,7 @@ namespace DynamicSqlEditor.Core
             if (!updateColumns.Any())
             {
                 FileLogger.Warning($"No updatable columns provided for update on {_tableSchema.FullName}.");
-                return 0; // Or throw? Depends on desired behavior.
+                return 0;
             }
             if (_tableSchema.PrimaryKeys.Count == 0)
             {
@@ -102,7 +98,6 @@ namespace DynamicSqlEditor.Core
                 throw new ArgumentException("Original key values dictionary is null or missing values for one or more primary key columns.", nameof(originalKeyValues));
             }
 
-
             var sqlBuilder = new StringBuilder($"UPDATE [{_tableSchema.SchemaName}].[{_tableSchema.TableName}] SET ");
             sqlBuilder.Append(string.Join(", ", updateColumns.Select(c => $"[{c.ColumnName}] = @{c.ColumnName}")));
 
@@ -110,13 +105,11 @@ namespace DynamicSqlEditor.Core
                 .Select(c => SqlParameterHelper.CreateParameter($"@{c.ColumnName}", columnValues[c.ColumnName], c.GetSqlDbType()))
                 .ToList();
 
-            // Add WHERE clause for PKs - Access Column.ColumnName and Column.GetSqlDbType
             sqlBuilder.Append(" WHERE ");
-            sqlBuilder.Append(string.Join(" AND ", _tableSchema.PrimaryKeys.Select(pk => $"[{pk.Column.ColumnName}] = @PK_{pk.Column.ColumnName}"))); // Corrected access
+            sqlBuilder.Append(string.Join(" AND ", _tableSchema.PrimaryKeys.Select(pk => $"[{pk.Column.ColumnName}] = @PK_{pk.Column.ColumnName}")));
             parameters.AddRange(_tableSchema.PrimaryKeys.Select(pk =>
-                SqlParameterHelper.CreateParameter($"@PK_{pk.Column.ColumnName}", originalKeyValues[pk.Column.ColumnName], pk.Column.GetSqlDbType()))); // Corrected access
+                SqlParameterHelper.CreateParameter($"@PK_{pk.Column.ColumnName}", originalKeyValues[pk.Column.ColumnName], pk.Column.GetSqlDbType())));
 
-            // Add concurrency check
             _concurrencyHandler.AddConcurrencyCheckToCommand(sqlBuilder, parameters, originalTimestamp);
 
             try
@@ -125,7 +118,6 @@ namespace DynamicSqlEditor.Core
 
                 if (_concurrencyHandler.HasConcurrencyColumn && rowsAffected == 0)
                 {
-                    // Check if the record still exists with the original PK but different timestamp
                     bool exists = await CheckRecordExistsAsync(originalKeyValues);
                     if (exists)
                     {
@@ -133,14 +125,12 @@ namespace DynamicSqlEditor.Core
                     }
                     else
                     {
-                        // Record doesn't exist with that PK anymore
                         throw new DBConcurrencyException($"Update failed. The record in '{_tableSchema.FullName}' may have been deleted by another user.");
                     }
                 }
                 if (rowsAffected == 0 && !_concurrencyHandler.HasConcurrencyColumn)
                 {
                     FileLogger.Warning($"Update affected 0 rows for PKs {string.Join(",", originalKeyValues.Values)} in {_tableSchema.FullName}, but no concurrency column exists. Record might have been deleted.");
-                    // Optionally throw an exception here too. Consider checking existence.
                     bool exists = await CheckRecordExistsAsync(originalKeyValues);
                     if (!exists)
                     {
@@ -171,13 +161,11 @@ namespace DynamicSqlEditor.Core
             var sqlBuilder = new StringBuilder($"DELETE FROM [{_tableSchema.SchemaName}].[{_tableSchema.TableName}]");
             var parameters = new List<SqlParameter>();
 
-            // Add WHERE clause for PKs - Access Column.ColumnName and Column.GetSqlDbType
             sqlBuilder.Append(" WHERE ");
-            sqlBuilder.Append(string.Join(" AND ", _tableSchema.PrimaryKeys.Select(pk => $"[{pk.Column.ColumnName}] = @PK_{pk.Column.ColumnName}"))); // Corrected access
+            sqlBuilder.Append(string.Join(" AND ", _tableSchema.PrimaryKeys.Select(pk => $"[{pk.Column.ColumnName}] = @PK_{pk.Column.ColumnName}")));
             parameters.AddRange(_tableSchema.PrimaryKeys.Select(pk =>
-                SqlParameterHelper.CreateParameter($"@PK_{pk.Column.ColumnName}", keyValues[pk.Column.ColumnName], pk.Column.GetSqlDbType()))); // Corrected access
+                SqlParameterHelper.CreateParameter($"@PK_{pk.Column.ColumnName}", keyValues[pk.Column.ColumnName], pk.Column.GetSqlDbType())));
 
-            // Add concurrency check
             _concurrencyHandler.AddConcurrencyCheckToCommand(sqlBuilder, parameters, originalTimestamp);
 
             try
@@ -186,7 +174,6 @@ namespace DynamicSqlEditor.Core
 
                 if (_concurrencyHandler.HasConcurrencyColumn && rowsAffected == 0)
                 {
-                    // Check if the record still exists with the original PK but different timestamp
                     bool exists = await CheckRecordExistsAsync(keyValues);
                     if (exists)
                     {
@@ -194,26 +181,22 @@ namespace DynamicSqlEditor.Core
                     }
                     else
                     {
-                        // Record doesn't exist with that PK anymore (already deleted?)
                         FileLogger.Warning($"Delete affected 0 rows for PKs {string.Join(",", keyValues.Values)} in {_tableSchema.FullName}. Record may have already been deleted.");
-                        // Return 0 as it's effectively gone, or throw if strict concurrency needed?
                         return 0;
                     }
                 }
                 if (rowsAffected == 0 && !_concurrencyHandler.HasConcurrencyColumn)
                 {
                     FileLogger.Warning($"Delete affected 0 rows for PKs {string.Join(",", keyValues.Values)} in {_tableSchema.FullName}, but no concurrency column exists. Record might have been deleted already.");
-                    // Check existence to be sure
                     bool exists = await CheckRecordExistsAsync(keyValues);
-                    if (!exists) return 0; // Already deleted, consider success
+                    if (!exists) return 0;
                 }
 
                 return rowsAffected;
             }
             catch (SqlException ex)
             {
-                // Check for FK constraint violation on delete
-                if (ex.Number == 547) // Foreign key constraint violation number
+                if (ex.Number == 547)
                 {
                     FileLogger.Error($"Error deleting record from {_tableSchema.FullName} due to foreign key constraint.", ex);
                     throw new DataException($"Cannot delete record. It is referenced by data in other tables.", ex);
@@ -223,12 +206,11 @@ namespace DynamicSqlEditor.Core
             }
         }
 
-        // Helper to check if a record exists based on PK values
         private async Task<bool> CheckRecordExistsAsync(Dictionary<string, object> keyValues)
         {
             if (_tableSchema.PrimaryKeys.Count == 0 || keyValues == null || !_tableSchema.PrimaryKeys.All(pk => keyValues.ContainsKey(pk.Column.ColumnName)))
             {
-                return false; // Cannot check if PK info is missing
+                return false;
             }
 
             var sqlBuilder = new StringBuilder($"SELECT COUNT(*) FROM {_tableSchema.FullName} WHERE ");
@@ -245,7 +227,7 @@ namespace DynamicSqlEditor.Core
             catch (Exception ex)
             {
                 FileLogger.Error($"Error checking record existence in {_tableSchema.FullName}", ex);
-                return false; // Assume not found on error? Or rethrow?
+                return false;
             }
         }
     }
