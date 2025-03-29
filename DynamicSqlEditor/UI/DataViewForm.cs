@@ -38,6 +38,30 @@ namespace DynamicSqlEditor.UI
         public TableSchema TableSchema { get; }
         public event Action<object, string> StatusChanged;
 
+        // File: DynamicSqlEditor/UI/DataViewForm.cs
+
+        // Add near the top with other fields/events
+        public event EventHandler<RequestOpenDataViewEventArgs> RequestOpenDataView;
+
+        // Add this new class (can be inside DataViewForm or in a separate file)
+        public class RequestOpenDataViewEventArgs : EventArgs
+        {
+            public TableSchema TargetTableSchema { get; }
+            public Dictionary<string, object> PrimaryKeyValues { get; }
+
+            public RequestOpenDataViewEventArgs(TableSchema targetTableSchema, Dictionary<string, object> primaryKeyValues)
+            {
+                TargetTableSchema = targetTableSchema;
+                PrimaryKeyValues = primaryKeyValues;
+            }
+        }
+
+        // Add a method to raise the event
+        protected virtual void OnRequestOpenDataView(RequestOpenDataViewEventArgs e)
+        {
+            RequestOpenDataView?.Invoke(this, e);
+        }
+
         public bool IsDirty
         {
             get => _isDirty;
@@ -52,7 +76,8 @@ namespace DynamicSqlEditor.UI
             }
         }
 
-        public DataViewForm(StateManager stateManager, TableSchema tableSchema)
+        private readonly Dictionary<string, object> _initialPrimaryKeyValues;
+        public DataViewForm(StateManager stateManager, TableSchema tableSchema, Dictionary<string, object> initialPrimaryKeyValues = null)
         {
             InitializeComponent();
 
@@ -61,7 +86,10 @@ namespace DynamicSqlEditor.UI
             _tableConfig = _stateManager.ConfigManager.GetTableConfig(TableSchema.SchemaName, TableSchema.TableName);
             _globalConfig = _stateManager.ConfigManager.CurrentConfig.Global;
 
-            _dataViewManager = new DynamicSqlEditor.Core.DataViewManager(_stateManager.DbManager, TableSchema, _tableConfig);
+            // Store the initial PKs
+            _initialPrimaryKeyValues = initialPrimaryKeyValues; // Can be null
+
+            _dataViewManager = new Core.DataViewManager(_stateManager.DbManager, TableSchema, _tableConfig);
             _crudManager = new CrudManager(_stateManager.DbManager, TableSchema);
             _concurrencyHandler = new ConcurrencyHandler(TableSchema);
 
@@ -100,26 +128,42 @@ namespace DynamicSqlEditor.UI
         private async void DataViewForm_Load(object sender, EventArgs e)
         {
             if (_isLoading) return;
-            _isLoading = true;
+            _isLoading = true; // Set loading flag early
             this.Cursor = Cursors.WaitCursor;
-            OnStatusChanged($"Loading {TableSchema.DisplayName}...");
+            OnStatusChanged($"Initializing view for {TableSchema.DisplayName}...");
 
             try
             {
-                // 1. Build Static UI Parts (Filters, Detail Panel Structure, Related Tabs Structure, Action Buttons)
+                // 1. Build Static UI Parts
                 BuildFilterUI();
-                await BuildDetailPanelAsync(); // This now assigns _detailBuilder
+                await BuildDetailPanelAsync();
                 BuildRelatedTabs();
+                AttachRelatedGridEventHandlers(); // Attach handlers after tabs are built
                 BuildActionButtons();
 
-                // 2. Initial Data Load
-                await LoadDataAsync(1);
+                // 2. Determine Initial Page
+                int initialPage = 1;
+                if (_initialPrimaryKeyValues != null && _initialPrimaryKeyValues.Any())
+                {
+                    OnStatusChanged($"Calculating initial page for {TableSchema.DisplayName}...");
+                    initialPage = await _dataViewManager.GetPageNumberForRowAsync(_initialPrimaryKeyValues);
+                }
 
-                // 3. Set initial state
-                SetEditMode(false); // Start in view mode
-                IsDirty = false; // Ensure clean state initially
-                saveButton.Enabled = false;
-                deleteButton.Enabled = _bindingSource.Current != null;
+                // 3. Initial Data Load (using calculated page)
+                await LoadDataAsync(initialPage); // Load the potentially calculated page
+
+                // 4. Select Initial Row (if applicable and data loaded)
+                if (_initialPrimaryKeyValues != null && _initialPrimaryKeyValues.Any() && _bindingSource.Count > 0)
+                {
+                    SelectRowByPrimaryKey(_initialPrimaryKeyValues);
+                    // Clear the initial values so they aren't used on refresh
+                    // _initialPrimaryKeyValues = null; // Keep it for now in case LoadDataAsync failed? Or clear here? Let's clear after successful selection.
+                }
+
+                // 5. Set initial state
+                // SetEditMode and IsDirty are handled within LoadDataAsync/PopulateDetailPanel now
+                // saveButton.Enabled = IsDirty; // Handled by IsDirty setter
+                // deleteButton.Enabled = _bindingSource.Current != null; // Handled by UpdateStatusAndControlStates
             }
             catch (Exception ex)
             {
@@ -127,9 +171,132 @@ namespace DynamicSqlEditor.UI
             }
             finally
             {
-                _isLoading = false;
+                _isLoading = false; // Clear loading flag
                 this.Cursor = Cursors.Default;
+                // Status is updated by LoadDataAsync or error handler
+            }
+        }
+
+
+        private void SelectRowByPrimaryKey(Dictionary<string, object> primaryKeyValues)
+        {
+            if (primaryKeyValues == null || !primaryKeyValues.Any() || _bindingSource.DataSource == null)
+                return;
+
+            OnStatusChanged($"Selecting specified record in {TableSchema.DisplayName}...");
+            for (int i = 0; i < _bindingSource.Count; i++)
+            {
+                if (_bindingSource[i] is DataRowView rowView)
+                {
+                    bool match = true;
+                    foreach (var pk in TableSchema.PrimaryKeys)
+                    {
+                        string pkColName = pk.Column.ColumnName;
+                        if (!primaryKeyValues.TryGetValue(pkColName, out object targetValue) ||
+                            !rowView.Row.Table.Columns.Contains(pkColName) ||
+                            !Equals(rowView[pkColName], targetValue)) // Use Equals for safe comparison (handles DBNull etc.)
+                        {
+                            match = false;
+                            break;
+                        }
+                    }
+
+                    if (match)
+                    {
+                        _bindingSource.Position = i;
+                        // Ensure the grid scrolls to the selected row
+                        mainDataGridView.FirstDisplayedScrollingRowIndex = i;
+                        OnStatusChanged($"Record selected. Ready - {TableSchema.DisplayName}");
+                        // Successfully selected, clear the initial values now
+                        // _initialPrimaryKeyValues = null; // Let's not clear it, might be needed if user navigates away and back? Reconsider this. If we don't clear, re-opening the *same* instance might try to re-select.
+                        return; // Found and selected
+                    }
+                }
+            }
+            // If loop finishes, row wasn't found on the current page
+            FileLogger.Warning($"Initial primary key values provided, but the corresponding row was not found on the loaded page ({_dataViewManager.CurrentPage}) for {TableSchema.DisplayName}.");
+            OnStatusChanged($"Specified record not found on page {_dataViewManager.CurrentPage}. Ready - {TableSchema.DisplayName}");
+        }
+
+        // Add the event handler method
+        private async void RelatedGrid_CellDoubleClick(object sender, DataGridViewCellEventArgs e)
+        {
+            if (e.RowIndex < 0 || !(sender is DataGridView relatedGrid)) // Ignore header clicks
+                return;
+
+            if (!(relatedGrid.Parent is TabPage tabPage) || !(tabPage.Tag is RelatedChildDefinition relatedDef))
+                return;
+
+            var dataRowView = relatedGrid.Rows[e.RowIndex].DataBoundItem as DataRowView;
+            if (dataRowView == null)
+                return;
+
+            OnStatusChanged($"Looking up schema for {relatedDef.ChildTable}...");
+            this.Cursor = Cursors.WaitCursor;
+
+            try
+            {
+                // Find the TableSchema for the child table
+                string[] childTableParts = relatedDef.ChildTable.Split('.');
+                string childSchemaName = childTableParts.Length > 1 ? childTableParts[0] : "dbo";
+                string childTableName = childTableParts.Length > 1 ? childTableParts[1] : childTableParts[0];
+
+                TableSchema childTableSchema = _stateManager.AvailableTables.FirstOrDefault(ts =>
+                    ts.SchemaName.Equals(childSchemaName, StringComparison.OrdinalIgnoreCase) &&
+                    ts.TableName.Equals(childTableName, StringComparison.OrdinalIgnoreCase));
+
+                if (childTableSchema == null)
+                {
+                    HandleError($"Could not find schema information for table '{relatedDef.ChildTable}'.", null);
+                    return;
+                }
+
+                if (!childTableSchema.PrimaryKeys.Any())
+                {
+                    MessageBox.Show($"Cannot navigate: The related table '{childTableSchema.DisplayName}' does not have a primary key defined.", "Navigation Error", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
+
+                // Extract Primary Key values from the double-clicked row
+                var pkValues = new Dictionary<string, object>();
+                foreach (var pk in childTableSchema.PrimaryKeys)
+                {
+                    string pkColumnName = pk.Column.ColumnName;
+                    if (dataRowView.Row.Table.Columns.Contains(pkColumnName))
+                    {
+                        pkValues[pkColumnName] = dataRowView[pkColumnName];
+                    }
+                    else
+                    {
+                        HandleError($"Primary key column '{pkColumnName}' not found in the data for related table '{childTableSchema.DisplayName}'. Cannot navigate.", null);
+                        return; // Cannot navigate without all PKs
+                    }
+                }
+
+                // Raise the event to request MainForm to open the view
+                OnRequestOpenDataView(new RequestOpenDataViewEventArgs(childTableSchema, pkValues));
+            }
+            catch (Exception ex)
+            {
+                HandleError($"Error preparing navigation to related table '{relatedDef.ChildTable}'", ex);
+            }
+            finally
+            {
                 OnStatusChanged($"Ready - {TableSchema.DisplayName}");
+                this.Cursor = Cursors.Default;
+            }
+        }
+
+        private void AttachRelatedGridEventHandlers()
+        {
+            foreach (TabPage tabPage in relatedDataTabControl.TabPages)
+            {
+                // Skip the first tab (Details) or tabs without the correct tag/grid
+                if (tabPage.Tag is RelatedChildDefinition && tabPage.Controls.Count > 0 && tabPage.Controls[0] is DataGridView relatedGrid)
+                {
+                    relatedGrid.CellDoubleClick -= RelatedGrid_CellDoubleClick; // Prevent multiple subscriptions
+                    relatedGrid.CellDoubleClick += RelatedGrid_CellDoubleClick;
+                }
             }
         }
 

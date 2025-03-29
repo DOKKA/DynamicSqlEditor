@@ -48,6 +48,100 @@ namespace DynamicSqlEditor.Core
             ApplyDefaultFilter();
         }
 
+
+        public async Task<int> GetPageNumberForRowAsync(Dictionary<string, object> primaryKeyValues)
+        {
+            if (primaryKeyValues == null || !primaryKeyValues.Any() || !_tableSchema.PrimaryKeys.Any())
+            {
+                return 1; // Cannot determine page without PKs
+            }
+
+            // Ensure all PK columns are provided
+            if (!_tableSchema.PrimaryKeys.All(pk => primaryKeyValues.ContainsKey(pk.Column.ColumnName)))
+            {
+                FileLogger.Warning($"GetPageNumberForRowAsync: Not all primary key values provided for table {_tableSchema.FullName}.");
+                return 1;
+            }
+
+            string baseQuery = _queryBuilder.GetSelectQuery();
+            string orderByClause = _queryBuilder.GetOrderByClause(CurrentSortColumn, this.CurrentSortDirection);
+            string whereClause = _queryBuilder.GetWhereClause(CurrentFilter); // Use current filter
+            var filterParameters = _queryBuilder.GetFilterParameters(CurrentFilter, CurrentFilterParameters); // Use current filter params
+
+            if (string.IsNullOrWhiteSpace(orderByClause))
+            {
+                FileLogger.Warning($"GetPageNumberForRowAsync: Cannot determine page number without a valid ORDER BY clause for table {_tableSchema.FullName}.");
+                return 1; // ROW_NUMBER requires ORDER BY
+            }
+
+            // --- Build the ROW_NUMBER query to find the specific row ---
+            var sb = new StringBuilder();
+            var parameters = new List<SqlParameter>(filterParameters); // Copy filter params
+
+            // Construct the WHERE clause for the target PK
+            var pkWhereClauses = new List<string>();
+            foreach (var pk in _tableSchema.PrimaryKeys)
+            {
+                string paramName = $"@TargetPK_{pk.Column.ColumnName}";
+                pkWhereClauses.Add($"InnerQuery.[{pk.Column.ColumnName}] = {paramName}");
+                parameters.Add(SqlParameterHelper.CreateParameter(paramName, primaryKeyValues[pk.Column.ColumnName], pk.Column.GetSqlDbType()));
+            }
+            string targetPkWhere = string.Join(" AND ", pkWhereClauses);
+
+            // Remove placeholders from the inner query
+            string innerQuery = baseQuery;
+            if (!string.IsNullOrWhiteSpace(whereClause))
+            {
+                innerQuery = innerQuery.Replace(Constants.WherePlaceholder, $"WHERE {whereClause}");
+            }
+            else
+            {
+                innerQuery = innerQuery.Replace(Constants.WherePlaceholder, ""); // Remove placeholder
+            }
+            innerQuery = innerQuery.Replace(Constants.OrderByPlaceholder, "");
+            innerQuery = innerQuery.Replace(Constants.PagingPlaceholder, "");
+
+            // Find the SELECT list end and FROM start (simplified)
+            int selectEndIndex = innerQuery.IndexOf("SELECT ", StringComparison.OrdinalIgnoreCase) + "SELECT ".Length;
+            int fromIndex = innerQuery.IndexOf(" FROM ", StringComparison.OrdinalIgnoreCase);
+            if (fromIndex == -1) throw new ArgumentException("Invalid baseSelectQuery: 'FROM' clause not found.");
+            string selectList = innerQuery.Substring(selectEndIndex, fromIndex - selectEndIndex).Trim();
+
+            sb.AppendLine("WITH NumberedRows AS (");
+            sb.Append("  SELECT ");
+            // Select only PK columns needed for the outer WHERE clause
+            sb.Append(string.Join(", ", _tableSchema.PrimaryKeys.Select(pk => $"[{pk.Column.ColumnName}]")));
+            sb.AppendLine(",");
+            sb.AppendLine($"    ROW_NUMBER() OVER (ORDER BY {orderByClause}) AS RowNum");
+            sb.AppendLine($"  FROM ({innerQuery}) AS InnerQuery"); // Use subquery alias
+            sb.AppendLine(")");
+            sb.AppendLine("SELECT RowNum");
+            sb.AppendLine("FROM NumberedRows InnerQuery"); // Alias needed for PK WHERE clause
+            sb.AppendLine($"WHERE {targetPkWhere}");
+
+            try
+            {
+                object result = await _dbManager.ExecuteScalarAsync(sb.ToString(), parameters);
+                if (result != null && result != DBNull.Value)
+                {
+                    long rowNum = Convert.ToInt64(result);
+                    int pageNumber = (PageSize <= 0) ? 1 : (int)Math.Ceiling((double)rowNum / PageSize);
+                    FileLogger.Info($"Calculated page number {pageNumber} for PKs in {_tableSchema.FullName}.");
+                    return pageNumber;
+                }
+                else
+                {
+                    FileLogger.Warning($"Could not find row matching PKs in {_tableSchema.FullName} to determine page number.");
+                    return 1; // Row not found (maybe filtered out?), default to page 1
+                }
+            }
+            catch (Exception ex)
+            {
+                FileLogger.Error($"Error calculating page number for row in {_tableSchema.FullName}", ex);
+                return 1; // Default to page 1 on error
+            }
+        }
+
         private void ApplyDefaultSort()
         {
             CurrentSortColumn = _tableConfig.DefaultSortColumn;

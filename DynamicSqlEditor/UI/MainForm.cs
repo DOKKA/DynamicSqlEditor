@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Windows.Forms;
 using DynamicSqlEditor.Common;
@@ -132,18 +133,22 @@ namespace DynamicSqlEditor.UI
         {
             if (sender is ToolStripMenuItem menuItem && menuItem.Tag is TableSchema tableSchema)
             {
-                OpenDataViewForm(tableSchema);
+                OpenDataViewForm(tableSchema); // Call without PKs for menu clicks
             }
         }
-
-        private void OpenDataViewForm(TableSchema tableSchema)
+        // Modify the OpenDataViewForm method signature
+        private void OpenDataViewForm(TableSchema tableSchema, Dictionary<string, object> initialPrimaryKeyValues = null)
         {
-            // Check if already open
+            // Check if already open (consider PKs? For now, just by table)
             foreach (Form form in this.MdiChildren)
             {
                 if (form is DataViewForm dvf && dvf.TableSchema.FullName == tableSchema.FullName)
                 {
+                    // If already open, maybe just activate and try to navigate?
+                    // For simplicity now, just activate. A more complex approach
+                    // could involve telling the existing form to navigate.
                     dvf.Activate();
+                    // TODO: Optionally tell the existing form to navigate to the specific PKs
                     return;
                 }
             }
@@ -151,22 +156,31 @@ namespace DynamicSqlEditor.UI
             try
             {
                 UpdateStatus($"Loading view for {tableSchema.DisplayName}...");
-                var dataViewForm = new DataViewForm(_stateManager, tableSchema);
+                // Pass the initial PK values to the constructor
+                var dataViewForm = new DataViewForm(_stateManager, tableSchema, initialPrimaryKeyValues);
                 dataViewForm.MdiParent = this;
                 dataViewForm.StatusChanged += ChildForm_StatusChanged;
+                // Subscribe to the new event
+                dataViewForm.RequestOpenDataView += DataViewForm_RequestOpenDataView;
                 dataViewForm.Show();
-                // Status update will happen within DataViewForm Load/Async operations
             }
             catch (Exception ex)
             {
-                 string errorMsg = $"Error opening view for {tableSchema.DisplayName}: {ex.Message}";
-                 FileLogger.Error(errorMsg, ex);
-                 MessageBox.Show(errorMsg, "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                 UpdateStatus($"Error loading {tableSchema.DisplayName}. Ready.");
+                string errorMsg = $"Error opening view for {tableSchema.DisplayName}: {ex.Message}";
+                FileLogger.Error(errorMsg, ex);
+                MessageBox.Show(errorMsg, "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                UpdateStatus($"Error loading {tableSchema.DisplayName}. Ready.");
             }
         }
 
-         private void ChildForm_StatusChanged(object sender, string statusMessage)
+        // Add the event handler for the request from DataViewForm
+        private void DataViewForm_RequestOpenDataView(object sender, DataViewForm.RequestOpenDataViewEventArgs e)
+        {
+            // Call the modified OpenDataViewForm with the details from the event args
+            OpenDataViewForm(e.TargetTableSchema, e.PrimaryKeyValues);
+        }
+
+        private void ChildForm_StatusChanged(object sender, string statusMessage)
         {
             UpdateStatus(statusMessage);
         }
