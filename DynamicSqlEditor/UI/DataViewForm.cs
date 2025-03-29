@@ -568,6 +568,7 @@ namespace DynamicSqlEditor.UI
             await LoadDataAsync(_dataViewManager.CurrentPage);
         }
 
+        // In DataViewForm.cs
         private async void FilterComboBox_SelectedIndexChanged(object sender, EventArgs e)
         {
             if (_isLoading || !(sender is ComboBox cmb) || cmb.SelectedItem == null) return;
@@ -575,14 +576,25 @@ namespace DynamicSqlEditor.UI
             FilterDefinition selectedFilter = null;
             Dictionary<string, object> filterParams = null;
 
+            // --- Adjust Selection Logic ---
             if (cmb.SelectedItem is KeyValuePair<string, FilterDefinition> kvp)
             {
+                // Selected item is a filter definition
                 selectedFilter = kvp.Value;
             }
-            else if (cmb.SelectedItem.ToString() == FilterUIBuilder.ClearFilterText)
+            else if (cmb.SelectedItem is string selectedString && selectedString == FilterUIBuilder.ClearFilterText)
             {
+                // Selected item is the "Clear Filter" option
                 selectedFilter = null;
             }
+            else
+            {
+                // Should not happen with the current setup, but handle defensively
+                FileLogger.Warning($"Unexpected item type selected in filter ComboBox: {cmb.SelectedItem.GetType()}");
+                return;
+            }
+            // --- End Adjustment ---
+
 
             if (selectedFilter != null && !string.IsNullOrEmpty(selectedFilter.RequiresInput))
             {
@@ -594,25 +606,27 @@ namespace DynamicSqlEditor.UI
                     }
                     else
                     {
+                        // Revert selection visually
                         cmb.SelectedIndexChanged -= FilterComboBox_SelectedIndexChanged;
+                        object itemToRestore = FilterUIBuilder.ClearFilterText; // Default
                         if (_dataViewManager.CurrentFilter != null)
                         {
-                            var filterItem = cmb.Items.OfType<KeyValuePair<string, FilterDefinition>>()
-                                .FirstOrDefault(item => item.Value == _dataViewManager.CurrentFilter);
-                            cmb.SelectedItem = filterItem;
+                            // Find the KVP matching the currently active filter
+                            var currentKvp = cmb.Items.OfType<KeyValuePair<string, FilterDefinition>>()
+                                                .FirstOrDefault(item => item.Value == _dataViewManager.CurrentFilter);
+                            if (currentKvp.Key != null) // Check if found
+                            {
+                                itemToRestore = currentKvp;
+                            }
                         }
-                        else
-                        {
-                            var clearItem = cmb.Items.OfType<string>()
-                                .FirstOrDefault(item => item == FilterUIBuilder.ClearFilterText);
-                            cmb.SelectedItem = clearItem;
-                        }
+                        cmb.SelectedItem = itemToRestore;
                         cmb.SelectedIndexChanged += FilterComboBox_SelectedIndexChanged;
                         return;
                     }
                 }
             }
 
+            // ... rest of the method remains the same ...
             this.Cursor = Cursors.WaitCursor;
             OnStatusChanged($"Applying filter '{selectedFilter?.Label ?? "None"}'...");
             try
@@ -625,15 +639,16 @@ namespace DynamicSqlEditor.UI
                 {
                     await _dataViewManager.ClearFilterAsync();
                 }
+                // Refresh data view after applying filter (LoadDataAsync handles UI updates)
+                await LoadDataAsync(1); // Load first page with new filter
             }
             catch (Exception ex)
             {
                 HandleError($"Error applying filter '{selectedFilter?.Label ?? "None"}'", ex);
-                this.Cursor = Cursors.Default;
-                OnStatusChanged($"Error applying filter. Ready. - {TableSchema.DisplayName}");
+                // No need for separate UI updates here, LoadDataAsync handles status/cursor
             }
+            // finally block removed as LoadDataAsync handles cursor/status updates
         }
-
 
         private async void MainDataGridView_ColumnHeaderMouseClick(object sender, DataGridViewCellMouseEventArgs e)
         {

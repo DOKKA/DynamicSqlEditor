@@ -116,7 +116,7 @@ namespace DynamicSqlEditor.Configuration
                     }
                     else if (sectionName.StartsWith(Constants.Sections.TablePrefix, StringComparison.OrdinalIgnoreCase))
                     {
-                        string tableName = sectionName.Substring(Constants.Sections.TablePrefix.Length);
+                        string tableName = sectionName.Substring(Constants.Sections.TablePrefix.Length).Trim();
                         ProcessTableSection(tableName, settings);
                     }
                     else
@@ -231,7 +231,9 @@ namespace DynamicSqlEditor.Configuration
                         string filterName = key.Substring(Constants.Keys.FilterPrefix.Length);
                         if (filterName.Equals("Default", StringComparison.OrdinalIgnoreCase)) continue; // Skip Filter.Default here
                         var filter = ParseFilterDefinition(filterName, value, tableName);
-                        if (filter != null) tableConfig.Filters[filterName] = filter;
+                        if (filter != null) 
+                            tableConfig.Filters[filterName] = filter;
+                        var www = tableConfig;
                     }
                     else if (key.StartsWith(Constants.Keys.DetailFormFieldPrefix, StringComparison.OrdinalIgnoreCase))
                     {

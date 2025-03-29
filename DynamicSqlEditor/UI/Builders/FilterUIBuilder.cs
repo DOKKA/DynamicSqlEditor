@@ -1,3 +1,4 @@
+// File: DynamicSqlEditor/UI/Builders/FilterUIBuilder.cs
 using System;
 using System.Collections.Generic;
 using System.Drawing;
@@ -25,7 +26,6 @@ namespace DynamicSqlEditor.UI.Builders
 
             if (_tableConfig.Filters == null || !_tableConfig.Filters.Any())
             {
-                // Optionally add a label indicating no filters are defined
                 return;
             }
 
@@ -33,7 +33,7 @@ namespace DynamicSqlEditor.UI.Builders
             {
                 Text = "Filter:",
                 AutoSize = true,
-                Location = new Point(5, 9), // Adjust position as needed
+                Location = new Point(5, 9),
                 Anchor = AnchorStyles.Left
             };
 
@@ -42,50 +42,67 @@ namespace DynamicSqlEditor.UI.Builders
                 Name = "filterComboBox",
                 DropDownStyle = ComboBoxStyle.DropDownList,
                 Location = new Point(filterLabel.Right + 5, 5),
-                Width = 250, // Adjust width as needed
+                Width = 250,
                 Anchor = AnchorStyles.Left
             };
 
-            // Use KeyValuePair to store both name and definition
-            var filterItems = new List<object> { ClearFilterText }; // Add "No Filter" option
-            filterItems.AddRange(_tableConfig.Filters
+            // --- Start Modification ---
+
+            // 1. Add items directly to the Items collection
+            filterComboBox.Items.Clear();
+            filterComboBox.Items.Add(ClearFilterText); // Add the clear string first
+
+            var sortedFilters = _tableConfig.Filters
                                      .OrderBy(f => f.Value.Label)
                                      .Select(kvp => new KeyValuePair<string, FilterDefinition>(kvp.Key, kvp.Value))
-                                     .Cast<object>()
-                                     .ToList());
+                                     .ToList();
 
-            filterComboBox.DataSource = filterItems;
-            filterComboBox.DisplayMember = "Value.Label"; // Display the Label property of FilterDefinition
-            filterComboBox.ValueMember = "Key"; // Use the filter name as the value
+            foreach (var kvp in sortedFilters)
+            {
+                // Add the KeyValuePair itself. The Format event will handle display.
+                filterComboBox.Items.Add(kvp);
+            }
 
-            // Handle display for the "Clear Filter" string item
+            // 2. Use the Format event to display the correct text
+            filterComboBox.FormattingEnabled = true; // Important for Format event
             filterComboBox.Format += (s, e) => {
                 if (e.ListItem is KeyValuePair<string, FilterDefinition> kvp)
                 {
-                    e.Value = kvp.Value.Label;
+                    // Display the Label from the FilterDefinition
+                    e.Value = kvp.Value.Label ?? kvp.Key; // Fallback to key if label is missing
                 }
                 else if (e.ListItem is string str)
                 {
-                    e.Value = str; // Display the string itself ("-- No Filter --")
+                    // Display the string itself (e.g., "-- No Filter --")
+                    e.Value = str;
+                }
+                else if (e.ListItem != null)
+                {
+                    // Handle unexpected types if necessary
+                    e.Value = e.ListItem.ToString();
                 }
             };
 
+            // 3. Remove DataSource, DisplayMember, ValueMember assignments
+            // filterComboBox.DataSource = filterItems; // REMOVED
+            // filterComboBox.DisplayMember = "Value.Label"; // REMOVED
+            // filterComboBox.ValueMember = "Key"; // REMOVED
+
+            // --- End Modification ---
+
 
             // Set default filter if specified
-            if (!string.IsNullOrEmpty(_tableConfig.DefaultFilterName) && _tableConfig.Filters.ContainsKey(_tableConfig.DefaultFilterName))
+            object itemToSelect = ClearFilterText; // Default to clear text
+            if (!string.IsNullOrEmpty(_tableConfig.DefaultFilterName))
             {
-                 var defaultItem = filterItems.OfType<KeyValuePair<string, FilterDefinition>>()
-                                             .FirstOrDefault(kvp => kvp.Key.Equals(_tableConfig.DefaultFilterName, StringComparison.OrdinalIgnoreCase));
-                 if (defaultItem.Key != null) // Check if found
-                 {
-                     filterComboBox.SelectedItem = defaultItem;
-                 }
-                 else filterComboBox.SelectedItem = ClearFilterText; // Fallback
+                // Find the KeyValuePair corresponding to the default filter name
+                var defaultKvp = sortedFilters.FirstOrDefault(kvp => kvp.Key.Equals(_tableConfig.DefaultFilterName, StringComparison.OrdinalIgnoreCase));
+                if (defaultKvp.Key != null) // Check if KeyValuePair was found (Key won't be null)
+                {
+                    itemToSelect = defaultKvp;
+                }
             }
-            else
-            {
-                filterComboBox.SelectedItem = ClearFilterText; // Default to "No Filter"
-            }
+            filterComboBox.SelectedItem = itemToSelect;
 
 
             filterComboBox.SelectedIndexChanged += filterChangedHandler;
