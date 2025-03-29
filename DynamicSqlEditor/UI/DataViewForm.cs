@@ -226,6 +226,7 @@ namespace DynamicSqlEditor.UI
             }
         }
 
+
         private void UpdateStatusAndControlStates()
         {
             bool hasRecords = _dataViewManager.TotalRecords > 0;
@@ -234,11 +235,20 @@ namespace DynamicSqlEditor.UI
             deleteButton.Enabled = recordSelected && !_isNewRecord;
             saveButton.Enabled = IsDirty;
 
-            foreach (Control c in actionButtonPanel.Controls)
+            var flowPanel = actionButtonPanel.Controls.OfType<FlowLayoutPanel>().FirstOrDefault();
+            if (flowPanel != null)
             {
-                if (c is Button btn && btn.Tag is ActionButtonDefinition actionDef)
+                foreach (Control c in flowPanel.Controls)
                 {
-                    btn.Enabled = !actionDef.RequiresSelection || recordSelected;
+                    if (c is Button btn && btn.Tag is ActionButtonDefinition actionDef)
+                    {
+                        btn.Enabled = !actionDef.RequiresSelection || recordSelected;
+
+                        if (_globalConfig.DisableCustomActionExecution)
+                        {
+                            btn.Enabled = false;
+                        }
+                    }
                 }
             }
         }
