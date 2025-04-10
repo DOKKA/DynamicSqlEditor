@@ -568,15 +568,27 @@ namespace DynamicSqlEditor.UI
                     return;
                 }
 
+                bool isNew = _isNewRecord; // Store before potentially changing it
 
-                if (_isNewRecord)
+                if (isNew) // Use the stored value
                 {
                     await _crudManager.InsertRecordAsync(columnValues);
                     OnStatusChanged($"New record saved successfully for {TableSchema.DisplayName}.");
                 }
                 else
                 {
-                    object originalTimestamp = _concurrencyHandler.GetTimestampValue(_bindingSource.Current as DataRowView);
+                    // Ensure _bindingSource.Current is valid before getting timestamp if possible
+                    // Although _originalKeyValues should be sufficient for the update itself.
+                    object originalTimestamp = null;
+                    if (_bindingSource.Current is DataRowView currentView)
+                    {
+                        originalTimestamp = _concurrencyHandler.GetTimestampValue(currentView);
+                    }
+                    else if (!isNew) // Only warn if it was an update and current is null
+                    {
+                        FileLogger.Warning("Could not get current DataRowView to retrieve timestamp before update. Concurrency check might be affected if timestamp column exists.");
+                    }
+
                     int rowsAffected = await _crudManager.UpdateRecordAsync(columnValues, _originalKeyValues, originalTimestamp);
                     if (rowsAffected > 0)
                     {
@@ -584,28 +596,58 @@ namespace DynamicSqlEditor.UI
                     }
                     else
                     {
-                        OnStatusChanged($"Record update may not have completed (0 rows affected). - {TableSchema.DisplayName}");
+                        // This might happen due to concurrency even if no exception was thrown (e.g., no timestamp column)
+                        OnStatusChanged($"Record update affected 0 rows. It might have been modified or deleted. - {TableSchema.DisplayName}");
                     }
                 }
 
-                _isNewRecord = false;
+                // --- Reordered Section ---
+                _isNewRecord = false; // Update state flags
                 IsDirty = false;
-                SetEditMode(false);
+
+                // Refresh the data source BEFORE updating UI edit mode
+                await RefreshDataAsync(true);
+
+                // Resume binding AFTER the data source is refreshed
                 _bindingSource.ResumeBinding();
 
-                await RefreshDataAsync(true);
+                // Now update the edit mode based on the refreshed state
+                SetEditMode(false);
+                // --- End Reordered Section ---
+
+                // If it was a new record, try to select it after refresh
+                if (isNew)
+                {
+                    // TODO: Implement logic to find and select the newly added row
+                    // This might involve getting the new PK from InsertRecordAsync
+                    // and then calling SelectRowByPrimaryKey or similar.
+                    // For now, the refresh will just load the page it's on.
+                }
+
             }
             catch (DBConcurrencyException ex)
             {
                 HandleConcurrencyError(ex);
+                // After handling concurrency, we might need to re-enable edit mode if user chose not to reload
+                // Or ensure the state is consistent. For now, the handler forces a reload or keeps state.
             }
             catch (Exception ex)
             {
                 HandleError($"Error saving record for {TableSchema.DisplayName}", ex);
+                // If save failed, we should arguably remain in edit mode?
+                // Or revert changes? Current logic exits edit mode in finally.
+                // Consider adding logic here to keep edit mode enabled on error.
+                // For now, let finally handle it, but it might be confusing for the user.
             }
             finally
             {
+                // SetEditMode(false) is now called within the try block after refresh.
+                // We might not need it in finally anymore, unless an error occurred
+                // before the SetEditMode call in the try block.
+                // Let's keep the cursor reset.
                 this.Cursor = Cursors.Default;
+                // UpdateStatus is called within the try/catch blocks now.
+                UpdateStatusAndControlStates(); // Ensure button states are correct after save/refresh
             }
         }
 
