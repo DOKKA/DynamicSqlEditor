@@ -28,7 +28,7 @@ namespace DynamicSqlEditor.UI
         private readonly ConcurrencyHandler _concurrencyHandler;
 
         private BindingSource _bindingSource;
-        private DetailFormBuilder _detailBuilder; // <-- Add field for the builder instance
+        private DetailFormBuilder _detailBuilder;
         private bool _isDirty = false;
         private bool _isNewRecord = false;
         private bool _isLoading = false;
@@ -38,12 +38,9 @@ namespace DynamicSqlEditor.UI
         public TableSchema TableSchema { get; }
         public event Action<object, string> StatusChanged;
 
-        // File: DynamicSqlEditor/UI/DataViewForm.cs
 
-        // Add near the top with other fields/events
         public event EventHandler<RequestOpenDataViewEventArgs> RequestOpenDataView;
 
-        // Add this new class (can be inside DataViewForm or in a separate file)
         public class RequestOpenDataViewEventArgs : EventArgs
         {
             public TableSchema TargetTableSchema { get; }
@@ -56,7 +53,6 @@ namespace DynamicSqlEditor.UI
             }
         }
 
-        // Add a method to raise the event
         protected virtual void OnRequestOpenDataView(RequestOpenDataViewEventArgs e)
         {
             RequestOpenDataView?.Invoke(this, e);
@@ -86,8 +82,7 @@ namespace DynamicSqlEditor.UI
             _tableConfig = _stateManager.ConfigManager.GetTableConfig(TableSchema.SchemaName, TableSchema.TableName);
             _globalConfig = _stateManager.ConfigManager.CurrentConfig.Global;
 
-            // Store the initial PKs
-            _initialPrimaryKeyValues = initialPrimaryKeyValues; // Can be null
+            _initialPrimaryKeyValues = initialPrimaryKeyValues;
 
             _dataViewManager = new Core.DataViewManager(_stateManager.DbManager, TableSchema, _tableConfig);
             _crudManager = new CrudManager(_stateManager.DbManager, TableSchema);
@@ -96,7 +91,6 @@ namespace DynamicSqlEditor.UI
             this.Text = TableSchema.DisplayName;
             _bindingSource = new BindingSource();
 
-            // Wire up events
             this.Load += DataViewForm_Load;
             this.FormClosing += DataViewForm_FormClosing;
             mainDataGridView.SelectionChanged += MainDataGridView_SelectionChanged;
@@ -104,7 +98,6 @@ namespace DynamicSqlEditor.UI
             mainDataGridView.DataError += MainDataGridView_DataError;
             _bindingSource.CurrentChanged += BindingSource_CurrentChanged;
 
-            // Paging Control Events
             pagingControl.FirstPageClicked += async (s, e) => await NavigatePaging(_dataViewManager.FirstPageAsync);
             pagingControl.PreviousPageClicked += async (s, e) => await NavigatePaging(_dataViewManager.PreviousPageAsync);
             pagingControl.NextPageClicked += async (s, e) => await NavigatePaging(_dataViewManager.NextPageAsync);
@@ -114,34 +107,29 @@ namespace DynamicSqlEditor.UI
                 await LoadDataAsync(1);
             };
 
-
-            // Detail Action Buttons
             newButton.Click += NewButton_Click;
             saveButton.Click += async (s, e) => await SaveButton_ClickAsync();
             deleteButton.Click += async (s, e) => await DeleteButton_ClickAsync();
             refreshButton.Click += async (s, e) => await RefreshButton_ClickAsync();
 
-            // Related Tabs Lazy Loading
             relatedDataTabControl.SelectedIndexChanged += RelatedDataTabControl_SelectedIndexChanged;
         }
 
         private async void DataViewForm_Load(object sender, EventArgs e)
         {
             if (_isLoading) return;
-            _isLoading = true; // Set loading flag early
+            _isLoading = true;
             this.Cursor = Cursors.WaitCursor;
             OnStatusChanged($"Initializing view for {TableSchema.DisplayName}...");
 
             try
             {
-                // 1. Build Static UI Parts
                 BuildFilterUI();
                 await BuildDetailPanelAsync();
                 BuildRelatedTabs();
-                AttachRelatedGridEventHandlers(); // Attach handlers after tabs are built
+                AttachRelatedGridEventHandlers();
                 BuildActionButtons();
 
-                // 2. Determine Initial Page
                 int initialPage = 1;
                 if (_initialPrimaryKeyValues != null && _initialPrimaryKeyValues.Any())
                 {
@@ -149,21 +137,13 @@ namespace DynamicSqlEditor.UI
                     initialPage = await _dataViewManager.GetPageNumberForRowAsync(_initialPrimaryKeyValues);
                 }
 
-                // 3. Initial Data Load (using calculated page)
-                await LoadDataAsync(initialPage); // Load the potentially calculated page
+                await LoadDataAsync(initialPage);
 
-                // 4. Select Initial Row (if applicable and data loaded)
                 if (_initialPrimaryKeyValues != null && _initialPrimaryKeyValues.Any() && _bindingSource.Count > 0)
                 {
                     SelectRowByPrimaryKey(_initialPrimaryKeyValues);
-                    // Clear the initial values so they aren't used on refresh
-                    // _initialPrimaryKeyValues = null; // Keep it for now in case LoadDataAsync failed? Or clear here? Let's clear after successful selection.
                 }
 
-                // 5. Set initial state
-                // SetEditMode and IsDirty are handled within LoadDataAsync/PopulateDetailPanel now
-                // saveButton.Enabled = IsDirty; // Handled by IsDirty setter
-                // deleteButton.Enabled = _bindingSource.Current != null; // Handled by UpdateStatusAndControlStates
             }
             catch (Exception ex)
             {
@@ -171,9 +151,8 @@ namespace DynamicSqlEditor.UI
             }
             finally
             {
-                _isLoading = false; // Clear loading flag
+                _isLoading = false;
                 this.Cursor = Cursors.Default;
-                // Status is updated by LoadDataAsync or error handler
             }
         }
 
@@ -194,7 +173,7 @@ namespace DynamicSqlEditor.UI
                         string pkColName = pk.Column.ColumnName;
                         if (!primaryKeyValues.TryGetValue(pkColName, out object targetValue) ||
                             !rowView.Row.Table.Columns.Contains(pkColName) ||
-                            !Equals(rowView[pkColName], targetValue)) // Use Equals for safe comparison (handles DBNull etc.)
+                            !Equals(rowView[pkColName], targetValue))
                         {
                             match = false;
                             break;
@@ -204,24 +183,19 @@ namespace DynamicSqlEditor.UI
                     if (match)
                     {
                         _bindingSource.Position = i;
-                        // Ensure the grid scrolls to the selected row
                         mainDataGridView.FirstDisplayedScrollingRowIndex = i;
                         OnStatusChanged($"Record selected. Ready - {TableSchema.DisplayName}");
-                        // Successfully selected, clear the initial values now
-                        // _initialPrimaryKeyValues = null; // Let's not clear it, might be needed if user navigates away and back? Reconsider this. If we don't clear, re-opening the *same* instance might try to re-select.
-                        return; // Found and selected
+                        return;
                     }
                 }
             }
-            // If loop finishes, row wasn't found on the current page
             FileLogger.Warning($"Initial primary key values provided, but the corresponding row was not found on the loaded page ({_dataViewManager.CurrentPage}) for {TableSchema.DisplayName}.");
             OnStatusChanged($"Specified record not found on page {_dataViewManager.CurrentPage}. Ready - {TableSchema.DisplayName}");
         }
 
-        // Add the event handler method
         private async void RelatedGrid_CellDoubleClick(object sender, DataGridViewCellEventArgs e)
         {
-            if (e.RowIndex < 0 || !(sender is DataGridView relatedGrid)) // Ignore header clicks
+            if (e.RowIndex < 0 || !(sender is DataGridView relatedGrid))
                 return;
 
             if (!(relatedGrid.Parent is TabPage tabPage) || !(tabPage.Tag is RelatedChildDefinition relatedDef))
@@ -236,7 +210,6 @@ namespace DynamicSqlEditor.UI
 
             try
             {
-                // Find the TableSchema for the child table
                 string[] childTableParts = relatedDef.ChildTable.Split('.');
                 string childSchemaName = childTableParts.Length > 1 ? childTableParts[0] : "dbo";
                 string childTableName = childTableParts.Length > 1 ? childTableParts[1] : childTableParts[0];
@@ -257,7 +230,6 @@ namespace DynamicSqlEditor.UI
                     return;
                 }
 
-                // Extract Primary Key values from the double-clicked row
                 var pkValues = new Dictionary<string, object>();
                 foreach (var pk in childTableSchema.PrimaryKeys)
                 {
@@ -269,11 +241,10 @@ namespace DynamicSqlEditor.UI
                     else
                     {
                         HandleError($"Primary key column '{pkColumnName}' not found in the data for related table '{childTableSchema.DisplayName}'. Cannot navigate.", null);
-                        return; // Cannot navigate without all PKs
+                        return;
                     }
                 }
 
-                // Raise the event to request MainForm to open the view
                 OnRequestOpenDataView(new RequestOpenDataViewEventArgs(childTableSchema, pkValues));
             }
             catch (Exception ex)
@@ -291,10 +262,9 @@ namespace DynamicSqlEditor.UI
         {
             foreach (TabPage tabPage in relatedDataTabControl.TabPages)
             {
-                // Skip the first tab (Details) or tabs without the correct tag/grid
                 if (tabPage.Tag is RelatedChildDefinition && tabPage.Controls.Count > 0 && tabPage.Controls[0] is DataGridView relatedGrid)
                 {
-                    relatedGrid.CellDoubleClick -= RelatedGrid_CellDoubleClick; // Prevent multiple subscriptions
+                    relatedGrid.CellDoubleClick -= RelatedGrid_CellDoubleClick;
                     relatedGrid.CellDoubleClick += RelatedGrid_CellDoubleClick;
                 }
             }
@@ -308,7 +278,6 @@ namespace DynamicSqlEditor.UI
 
         private async Task BuildDetailPanelAsync()
         {
-            // Create and store the builder instance
             _detailBuilder = new DetailFormBuilder(detailPanel, TableSchema, _tableConfig, _globalConfig, _stateManager, _dataViewManager);
             await _detailBuilder.BuildFormAsync(Control_ValueChanged);
         }
@@ -330,7 +299,7 @@ namespace DynamicSqlEditor.UI
 
             if (IsDirty && !PromptSaveChanges()) return;
 
-            _isLoading = true; 
+            _isLoading = true;
             this.Cursor = Cursors.WaitCursor;
             mainDataGridView.DataSource = null;
             OnStatusChanged($"Loading page {pageNumber} for {TableSchema.DisplayName}...");
@@ -354,7 +323,7 @@ namespace DynamicSqlEditor.UI
             }
             finally
             {
-                _isLoading = false; 
+                _isLoading = false;
                 this.Cursor = Cursors.Default;
                 OnStatusChanged($"Page {_dataViewManager.CurrentPage} of {_dataViewManager.TotalPages} ({_dataViewManager.TotalRecords} records) - {TableSchema.DisplayName}");
             }
@@ -422,7 +391,6 @@ namespace DynamicSqlEditor.UI
 
         private void MainDataGridView_SelectionChanged(object sender, EventArgs e)
         {
-            // Handled by BindingSource_CurrentChanged
         }
 
         private void BindingSource_CurrentChanged(object sender, EventArgs e)
@@ -431,16 +399,12 @@ namespace DynamicSqlEditor.UI
 
             if (IsDirty && !PromptSaveChanges())
             {
-                // User cancelled the save/discard prompt
                 FileLogger.Warning("Selection changed while dirty, but user cancelled save/discard.");
 
-                // Temporarily remove the event handler
                 _bindingSource.CurrentChanged -= BindingSource_CurrentChanged;
 
-                // Revert to previous selection
                 if (_originalKeyValues != null)
                 {
-                    // Find the row with matching key values
                     foreach (DataRowView rowView in _bindingSource)
                     {
                         bool match = true;
@@ -461,10 +425,9 @@ namespace DynamicSqlEditor.UI
                     }
                 }
 
-                // Reattach the event handler
                 _bindingSource.CurrentChanged += BindingSource_CurrentChanged;
 
-                return; // Exit without updating UI
+                return;
             }
 
             PopulateDetailPanel();
@@ -473,42 +436,36 @@ namespace DynamicSqlEditor.UI
             UpdateStatusAndControlStates();
         }
 
-        // Calls instance method on _detailBuilder
         private void PopulateDetailPanel()
         {
             var currentView = _bindingSource.Current as DataRowView;
             _originalKeyValues = null;
 
-            if (_detailBuilder == null) return; // Guard against calls before builder is created
+            if (_detailBuilder == null) return;
 
-            // --- Start Modification ---
             _isPopulatingDetails = true;
-            try // Use try/finally to ensure flag is reset
+            try
             {
                 if (currentView == null || _isNewRecord)
                 {
-                    _detailBuilder.ClearControls(); // Use instance method
-                    SetEditMode(true); // Still set edit mode if new/null
-                                       // Don't return here, let finally run
+                    _detailBuilder.ClearControls();
+                    SetEditMode(true);
                 }
                 else
                 {
-                    SetEditMode(false); // Set view mode for existing record
+                    SetEditMode(false);
                     _originalKeyValues = GetKeyValues(currentView);
-                    _detailBuilder.PopulateControls(currentView); // Use instance method
+                    _detailBuilder.PopulateControls(currentView);
                 }
             }
             finally
             {
                 _isPopulatingDetails = false;
             }
-            // --- End Modification ---
 
-            // Reset IsDirty *after* populating, as population might have triggered it
-            // Only reset if not a new record, as new records should allow immediate editing
             if (!_isNewRecord)
             {
-                IsDirty = false; // Explicitly reset dirty flag after population
+                IsDirty = false;
             }
         }
 
@@ -531,12 +488,11 @@ namespace DynamicSqlEditor.UI
             return keyValues;
         }
 
-        // Calls instance method on _detailBuilder
         private void SetEditMode(bool enabled)
         {
-            if (_detailBuilder == null) return; // Guard
+            if (_detailBuilder == null) return;
 
-            _detailBuilder.SetControlsEnabled(enabled); // Use instance method
+            _detailBuilder.SetControlsEnabled(enabled);
             mainDataGridView.Enabled = !enabled;
             filterPanel.Enabled = !enabled;
             pagingControl.Enabled = !enabled;
@@ -547,30 +503,22 @@ namespace DynamicSqlEditor.UI
 
         private void Control_ValueChanged(object sender, EventArgs e)
         {
-            // --- Add this check ---
             if (_isLoading || _isPopulatingDetails) return;
-            // --- End Add ---
 
-            // Existing IsNull CheckBox logic...
             if (sender is CheckBox isNullChk && isNullChk.Tag?.ToString() == "IsNullCheckBox")
             {
-                // ... (rest of IsNull logic remains the same)
             }
 
-            // Existing Dirty flag logic...
             if (!_isNewRecord && !IsDirty)
             {
                 IsDirty = true;
             }
             else if (_isNewRecord)
             {
-                // For new records, any change should make it dirty enough to save
                 IsDirty = true;
-                // Ensure save button is enabled as soon as a new record is modified
                 saveButton.Enabled = true;
             }
 
-            // Only enter edit mode if it's an existing record being modified
             if (IsDirty && !_isNewRecord)
             {
                 SetEditMode(true);
@@ -581,7 +529,7 @@ namespace DynamicSqlEditor.UI
         private void NewButton_Click(object sender, EventArgs e)
         {
             if (IsDirty && !PromptSaveChanges()) return;
-            if (_detailBuilder == null) return; // Guard
+            if (_detailBuilder == null) return;
 
             _isNewRecord = true;
             IsDirty = false;
@@ -591,7 +539,7 @@ namespace DynamicSqlEditor.UI
             filterPanel.Enabled = false;
             pagingControl.Enabled = false;
 
-            _detailBuilder.ClearControls(); // Use instance method
+            _detailBuilder.ClearControls();
             SetEditMode(true);
             UpdateTitle();
             saveButton.Enabled = false;
@@ -604,14 +552,14 @@ namespace DynamicSqlEditor.UI
 
         private async Task SaveButton_ClickAsync()
         {
-            if (!IsDirty || _detailBuilder == null) return; // Guard
+            if (!IsDirty || _detailBuilder == null) return;
 
             this.Cursor = Cursors.WaitCursor;
             OnStatusChanged($"Saving record for {TableSchema.DisplayName}...");
 
             try
             {
-                var columnValues = _detailBuilder.GetControlValues(); // Use instance method
+                var columnValues = _detailBuilder.GetControlValues();
 
                 if (!ValidateInput(columnValues))
                 {
@@ -745,7 +693,6 @@ namespace DynamicSqlEditor.UI
             await LoadDataAsync(_dataViewManager.CurrentPage);
         }
 
-        // In DataViewForm.cs
         private async void FilterComboBox_SelectedIndexChanged(object sender, EventArgs e)
         {
             if (_isLoading || !(sender is ComboBox cmb) || cmb.SelectedItem == null) return;
@@ -753,24 +700,19 @@ namespace DynamicSqlEditor.UI
             FilterDefinition selectedFilter = null;
             Dictionary<string, object> filterParams = null;
 
-            // --- Adjust Selection Logic ---
             if (cmb.SelectedItem is KeyValuePair<string, FilterDefinition> kvp)
             {
-                // Selected item is a filter definition
                 selectedFilter = kvp.Value;
             }
             else if (cmb.SelectedItem is string selectedString && selectedString == FilterUIBuilder.ClearFilterText)
             {
-                // Selected item is the "Clear Filter" option
                 selectedFilter = null;
             }
             else
             {
-                // Should not happen with the current setup, but handle defensively
                 FileLogger.Warning($"Unexpected item type selected in filter ComboBox: {cmb.SelectedItem.GetType()}");
                 return;
             }
-            // --- End Adjustment ---
 
 
             if (selectedFilter != null && !string.IsNullOrEmpty(selectedFilter.RequiresInput))
@@ -783,15 +725,13 @@ namespace DynamicSqlEditor.UI
                     }
                     else
                     {
-                        // Revert selection visually
                         cmb.SelectedIndexChanged -= FilterComboBox_SelectedIndexChanged;
-                        object itemToRestore = FilterUIBuilder.ClearFilterText; // Default
+                        object itemToRestore = FilterUIBuilder.ClearFilterText;
                         if (_dataViewManager.CurrentFilter != null)
                         {
-                            // Find the KVP matching the currently active filter
                             var currentKvp = cmb.Items.OfType<KeyValuePair<string, FilterDefinition>>()
                                                 .FirstOrDefault(item => item.Value == _dataViewManager.CurrentFilter);
-                            if (currentKvp.Key != null) // Check if found
+                            if (currentKvp.Key != null)
                             {
                                 itemToRestore = currentKvp;
                             }
@@ -803,7 +743,6 @@ namespace DynamicSqlEditor.UI
                 }
             }
 
-            // ... rest of the method remains the same ...
             this.Cursor = Cursors.WaitCursor;
             OnStatusChanged($"Applying filter '{selectedFilter?.Label ?? "None"}'...");
             try
@@ -816,15 +755,12 @@ namespace DynamicSqlEditor.UI
                 {
                     await _dataViewManager.ClearFilterAsync();
                 }
-                // Refresh data view after applying filter (LoadDataAsync handles UI updates)
-                await LoadDataAsync(1); // Load first page with new filter
+                await LoadDataAsync(1);
             }
             catch (Exception ex)
             {
                 HandleError($"Error applying filter '{selectedFilter?.Label ?? "None"}'", ex);
-                // No need for separate UI updates here, LoadDataAsync handles status/cursor
             }
-            // finally block removed as LoadDataAsync handles cursor/status updates
         }
 
         private async void MainDataGridView_ColumnHeaderMouseClick(object sender, DataGridViewCellMouseEventArgs e)
@@ -1033,7 +969,7 @@ namespace DynamicSqlEditor.UI
                 IsDirty = false;
                 _isNewRecord = false;
                 _bindingSource.ResumeBinding();
-                PopulateDetailPanel(); // Calls instance method on _detailBuilder
+                PopulateDetailPanel();
                 SetEditMode(false);
                 return true;
             }
