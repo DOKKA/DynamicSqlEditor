@@ -1003,8 +1003,10 @@ namespace DynamicSqlEditor.UI
 
             if (result == DialogResult.Yes)
             {
-                Task<bool> saveTask = Task.Run(async () => { await SaveButton_ClickAsync(); return !IsDirty; });
-                return saveTask.Result;
+                // Execute the async save on the UI thread to avoid cross-thread
+                // exceptions from accessing form controls.
+                SaveButton_ClickAsync().GetAwaiter().GetResult();
+                return !IsDirty;
             }
             else if (result == DialogResult.No)
             {
@@ -1051,7 +1053,8 @@ namespace DynamicSqlEditor.UI
             {
                 IsDirty = false;
                 _isNewRecord = false;
-                Task.Run(async () => await RefreshDataAsync(true));
+                // Refresh synchronously on the UI thread to keep control access safe
+                RefreshDataAsync(true).GetAwaiter().GetResult();
             }
         }
 
@@ -1070,8 +1073,9 @@ namespace DynamicSqlEditor.UI
         public bool SaveChanges()
         {
             if (!IsDirty) return true;
-            Task<bool> saveTask = Task.Run(async () => { await SaveButton_ClickAsync(); return !IsDirty; });
-            return saveTask.Result;
+            // Run the async save on the current (UI) thread
+            SaveButton_ClickAsync().GetAwaiter().GetResult();
+            return !IsDirty;
         }
     }
 }
